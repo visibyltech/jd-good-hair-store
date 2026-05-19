@@ -119,7 +119,6 @@ export default function Shop() {
                 </Link>
                 <p className="feat-length">{p.length}</p>
                 <div className="price">{p.price}</div>
-                <div className="pss-price">Pay Small Small: {p.pss}</div>
 
                 {/* Two action buttons */}
                 <div className="card-actions">

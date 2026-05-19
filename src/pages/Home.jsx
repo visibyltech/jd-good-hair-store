@@ -72,7 +72,7 @@ export default function Home() {
           {FEATURED.map((p, i) => (
             <motion.a
               key={p.id}
-              href="/products"
+              href={`/products/${p.id}`}
               className="feat-card"
               initial={{ opacity: 0, y: 18 }}
               whileInView={{ opacity: 1, y: 0 }}
