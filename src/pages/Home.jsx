@@ -6,11 +6,16 @@ import Footer from '../components/Footer';
 const FEATURED = [
   { id: 1, name: 'Silky Straight Bundle', length: '18"', price: '₦129,900', pss: '₦150,000', img: '/product-straight.jpg' },
   { id: 2, name: 'Body Wave Bundle',       length: '20"', price: '₦149,900', pss: '₦170,000', img: '/product-bodywave.jpg' },
-  { id: 4, name: 'HD Lace Front Wig',      length: '24"', price: '₦349,900', pss: '₦380,000', img: '/product-wig.jpg' },
+  { id: 4, name: 'HD Lace Front Wig',      length: '24"', price: '₦349,900', pss: '₦380,000', img: '/product-wig.jpg'      },
   { id: 6, name: '13x4 Lace Frontal',      length: '18"', price: '₦189,900', pss: '₦210,000', img: '/product-frontal.jpg' },
 ];
 
-const CATEGORIES = ['Bundles', 'Wigs', 'Closures', 'Frontals'];
+const CATEGORIES = [
+  { label: 'Bundles',  href: '/products?category=Bundles' },
+  { label: 'Wigs',     href: '/products?category=Wigs' },
+  { label: 'Closures', href: '/products?category=Closures' },
+  { label: 'Frontals', href: '/products?category=Frontals' },
+];
 
 export default function Home() {
   return (
@@ -47,7 +52,7 @@ export default function Home() {
           <h2 className="section-title">Shop by Category</h2>
           <div className="category-pills">
             {CATEGORIES.map(cat => (
-              <Link key={cat} to={`/shop?cat=${cat.toLowerCase()}`} className="cat-pill">{cat}</Link>
+              <Link key={cat.label} to={cat.href} className="cat-pill">{cat.label}</Link>
             ))}
           </div>
         </div>
@@ -60,14 +65,14 @@ export default function Home() {
             <p className="section-eyebrow">Curated Selection</p>
             <h2 className="section-title" style={{ margin: 0 }}>Featured Products</h2>
           </div>
-          <Link to="/shop" className="view-all-btn">View All →</Link>
+          <Link to="/products" className="view-all-btn">View All →</Link>
         </div>
 
         <div className="feat-grid">
           {FEATURED.map((p, i) => (
             <motion.a
               key={p.id}
-              href={`/shop`}
+              href="/products"
               className="feat-card"
               initial={{ opacity: 0, y: 18 }}
               whileInView={{ opacity: 1, y: 0 }}
@@ -103,7 +108,7 @@ export default function Home() {
           <p className="section-eyebrow" style={{ color: 'var(--secondary)' }}>Flexible Payments</p>
           <h2 className="section-title">Pay in Installments</h2>
           <p className="pss-cta-sub">Get the hair you love now and pay over time. Split your purchase into easy monthly payments.</p>
-          <Link to="/shop" className="btn-hero-primary">Start Shopping</Link>
+          <Link to="/products" className="btn-hero-primary">Start Shopping</Link>
         </div>
       </section>
 
