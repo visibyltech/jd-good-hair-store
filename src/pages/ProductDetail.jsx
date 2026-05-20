@@ -1,20 +1,10 @@
-import { useState } from 'react';
+import { useState, useEffect } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import { ShoppingBag, ArrowLeft, ChevronDown } from 'lucide-react';
+import { doc, getDoc } from 'firebase/firestore';
+import { db } from '../firebase';
 import Footer from '../components/Footer';
 
-const PRODUCTS = [
-  { id: 1, name: 'Silky Straight Bundle', category: 'Bundles',  length: '18"',  price: 129900, pss: 150000, img: '/product-straight.jpg',  featured: true  },
-  { id: 2, name: 'Body Wave Bundle',       category: 'Bundles',  length: '20"',  price: 149900, pss: 170000, img: '/product-bodywave.jpg', featured: true  },
-  { id: 3, name: 'Deep Wave Bundle',       category: 'Bundles',  length: '22"',  price: 159900, pss: 180000, img: '/product-deepwave.jpg', featured: false },
-  { id: 4, name: 'HD Lace Front Wig',      category: 'Wigs',     length: '24"',  price: 349900, pss: 380000, img: '/product-wig.jpg',      featured: true  },
-  { id: 5, name: 'Silk Base Closure',      category: 'Closures', length: '16"',  price:  89900, pss: 105000, img: '/product-closure.jpg',  featured: false },
-  { id: 6, name: '13x4 Lace Frontal',      category: 'Frontals', length: '18"',  price: 189900, pss: 210000, img: '/product-frontal.jpg',  featured: true  },
-  { id: 7, name: 'Kinky Curly Bundle',     category: 'Bundles',  length: '20"',  price: 139900, pss: 160000, img: '/product-kinky.jpg',    featured: false },
-  { id: 8, name: 'Straight Lace Wig',      category: 'Wigs',     length: '26"',  price: 399900, pss: 430000, img: '/product-wig.jpg',      featured: false },
-];
-
-// Interest rate by number of installments
 const INTEREST = { 2: 0, 3: 10, 4: 10, 5: 20, 6: 20 };
 
 function fmt(n) {
@@ -23,16 +13,50 @@ function fmt(n) {
 
 export default function ProductDetail() {
   const { id } = useParams();
-  const product = PRODUCTS.find(p => p.id === Number(id));
+  
+  const [product, setProduct] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState('');
 
   const [showInstallment, setShowInstallment] = useState(false);
   const [installments, setInstallments] = useState(2);
 
-  if (!product) {
+  useEffect(() => {
+    const fetchProduct = async () => {
+      setLoading(true);
+      try {
+        const docRef = doc(db, "products", id);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          setProduct({ id: docSnap.id, ...docSnap.data() });
+        } else {
+          setError("Product not found");
+        }
+      } catch (err) {
+        console.error(err);
+        setError("Failed to load product");
+      } finally {
+        setLoading(false);
+      }
+    };
+    fetchProduct();
+  }, [id]);
+
+  if (loading) {
+    return (
+      <main>
+        <div className="container" style={{ padding: '4rem 1.5rem', textAlign: 'center', color: 'var(--primary)' }}>
+          Loading Product Details...
+        </div>
+      </main>
+    );
+  }
+
+  if (error || !product) {
     return (
       <main>
         <div className="container" style={{ padding: '4rem 1.5rem', textAlign: 'center' }}>
-          <h2 style={{ fontFamily: 'var(--font-display)', marginBottom: '1rem' }}>Product Not Found</h2>
+          <h2 style={{ fontFamily: 'var(--font-display)', marginBottom: '1rem' }}>{error || 'Product Not Found'}</h2>
           <Link to="/products" className="pd-back-link">← Back to Shop</Link>
         </div>
         <Footer />
@@ -41,10 +65,12 @@ export default function ProductDetail() {
   }
 
   // Installment calculations
+  const price = Number(product.price);
+  const pss = Number(product.pss);
   const rate        = INTEREST[installments] / 100;
-  const total       = product.price * (1 + rate);
+  const total       = price * (1 + rate);
   const monthly     = total / installments;
-  const interestAmt = total - product.price;
+  const interestAmt = total - price;
 
   return (
     <main>
@@ -71,7 +97,7 @@ export default function ProductDetail() {
             {/* Pricing card */}
             <div className="pd-pricing-card">
               <p className="pd-price-label">Full Payment</p>
-              <p className="pd-price">{fmt(product.price)}</p>
+              <p className="pd-price">{fmt(price)}</p>
               <p className="pd-pss-note" style={{ marginTop: '0.5rem' }}>
                 Delivery is only made after full payment is completed.
               </p>
@@ -147,7 +173,7 @@ export default function ProductDetail() {
             {/* Buy once button */}
             <button className="pd-buy-btn">
               <ShoppingBag size={18} />
-              Buy Once — {fmt(product.price)}
+              Buy Once — {fmt(price)}
             </button>
           </div>
         </div>

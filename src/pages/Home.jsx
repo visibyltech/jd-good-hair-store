@@ -1,115 +1,130 @@
-import { Link } from 'react-router-dom';
+import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
-import { ShoppingBag } from 'lucide-react';
+import { ArrowRight, Star, ShieldCheck, Heart } from 'lucide-react';
+import { collection, query, where, getDocs, limit } from 'firebase/firestore';
+import { db } from '../firebase';
 import Footer from '../components/Footer';
 
-const FEATURED = [
-  { id: 1, name: 'Silky Straight Bundle', length: '18"', price: '₦129,900', pss: '₦150,000', img: '/product-straight.jpg' },
-  { id: 2, name: 'Body Wave Bundle',       length: '20"', price: '₦149,900', pss: '₦170,000', img: '/product-bodywave.jpg' },
-  { id: 4, name: 'HD Lace Front Wig',      length: '24"', price: '₦349,900', pss: '₦380,000', img: '/product-wig.jpg'      },
-  { id: 6, name: '13x4 Lace Frontal',      length: '18"', price: '₦189,900', pss: '₦210,000', img: '/product-frontal.jpg' },
-];
-
-const CATEGORIES = [
-  { label: 'Bundles',  href: '/products?category=Bundles' },
-  { label: 'Wigs',     href: '/products?category=Wigs' },
-  { label: 'Closures', href: '/products?category=Closures' },
-  { label: 'Frontals', href: '/products?category=Frontals' },
-];
-
 export default function Home() {
+  const [featured, setFeatured] = useState([]);
+  
+  useEffect(() => {
+    const fetchFeatured = async () => {
+      try {
+        const q = query(collection(db, "products"), where("featured", "==", true), limit(4));
+        const querySnapshot = await getDocs(q);
+        const items = [];
+        querySnapshot.forEach((doc) => {
+          items.push({ id: doc.id, ...doc.data() });
+        });
+        setFeatured(items);
+      } catch (error) {
+        console.error("Error fetching featured products:", error);
+      }
+    };
+    fetchFeatured();
+  }, []);
+
   return (
     <main>
-      {/* ── Hero ── */}
+      {/* HERO SECTION */}
       <section className="hero-full">
         <div className="hero-full-bg">
-          <img src="/hero-banner.jpg" alt="JD Good Hair luxury hair extensions" loading="eager" />
-          <div className="hero-full-overlay" />
+          {/* Default to the primary hero image */}
+          <img src="/hero_banner_no_text_resized.png" alt="JD Good Hair - Luxury Hair Extensions" />
         </div>
-        <div className="container hero-full-content">
-          <motion.div
+        <div className="hero-full-overlay" />
+        <div className="hero-full-content">
+          <motion.div 
             className="hero-text-box"
-            initial={{ opacity: 0, y: 28 }}
+            initial={{ opacity: 0, y: 30 }}
             animate={{ opacity: 1, y: 0 }}
-            transition={{ duration: 0.75 }}
+            transition={{ duration: 0.8, ease: "easeOut" }}
           >
-            <p className="hero-eyebrow">Premium Hair Extensions</p>
-            <h1 className="hero-h1">Luxury for Less</h1>
+            <span className="hero-eyebrow">The Signature Collection</span>
+            <h1 className="hero-h1">Flawless Hair. Unmatched Quality.</h1>
             <p className="hero-sub">
-              Discover our curated collection of 100% virgin human hair bundles, wigs, closures &amp; frontals.
+              Experience the pinnacle of luxury with our 100% virgin hair bundles and precision-crafted lace wigs.
             </p>
-            <div className="hero-actions">
-              <Link to="/shop" className="btn-hero-primary">Shop Now</Link>
-              <Link to="/shop?cat=wigs" className="btn-hero-outline">Browse Wigs</Link>
+            <div style={{ display: 'flex', gap: '1rem' }}>
+              <a href="/products" className="hero-btn primary">
+                Shop the Collection
+              </a>
+              <a href="/products?cat=Wigs" className="hero-btn secondary">
+                View Wigs
+              </a>
             </div>
           </motion.div>
         </div>
       </section>
 
-      {/* ── Shop by Category ── */}
-      <section className="category-section">
-        <div className="container" style={{ textAlign: 'center' }}>
-          <h2 className="section-title">Shop by Category</h2>
-          <div className="category-pills">
-            {CATEGORIES.map(cat => (
-              <Link key={cat.label} to={cat.href} className="cat-pill">{cat.label}</Link>
-            ))}
-          </div>
+      {/* FEATURED PRODUCTS (now dynamic) */}
+      <section className="featured-section container">
+        <div className="feat-header">
+          <h2>Trending Now</h2>
+          <a href="/products" className="view-all">View All <ArrowRight size={16} /></a>
         </div>
-      </section>
-
-      {/* ── Featured Products ── */}
-      <section className="container featured-section">
-        <div className="featured-header">
-          <div>
-            <p className="section-eyebrow">Curated Selection</p>
-            <h2 className="section-title" style={{ margin: 0 }}>Featured Products</h2>
-          </div>
-          <Link to="/products" className="view-all-btn">View All →</Link>
-        </div>
-
         <div className="feat-grid">
-          {FEATURED.map((p, i) => (
+          {featured.map((p, i) => (
             <motion.a
               key={p.id}
               href={`/products/${p.id}`}
               className="feat-card"
               initial={{ opacity: 0, y: 18 }}
               whileInView={{ opacity: 1, y: 0 }}
-              viewport={{ once: true }}
-              transition={{ duration: 0.4, delay: i * 0.08 }}
+              viewport={{ once: true, margin: "-40px" }}
+              transition={{ delay: i * 0.1, duration: 0.5 }}
             >
-              <div className="feat-img-wrap">
+              <div className="img-wrap">
                 <img src={p.img} alt={p.name} loading="lazy" />
-                <span className="feat-badge">Featured</span>
               </div>
-              <div className="feat-info">
-                <h3 className="feat-name">{p.name}</h3>
-                <p className="feat-length">{p.length}</p>
-                <div className="feat-prices">
-                  <p className="feat-price">{p.price}</p>
-                  <p className="feat-pss">Pay Small Small: {p.pss}</p>
-                </div>
-                <div className="feat-actions">
-                  <button className="feat-cart-btn" aria-label={`Add ${p.name} to cart`}>
-                    <ShoppingBag size={18} />
-                  </button>
-                  <button className="feat-pss-btn">Pay Small Small</button>
-                </div>
+              <div className="info">
+                <h3>{p.name}</h3>
+                <p>{p.length}</p>
+                <div className="price">₦{Number(p.price).toLocaleString()}</div>
               </div>
             </motion.a>
           ))}
         </div>
       </section>
 
-      {/* ── Pay in Installments CTA ── */}
-      <section className="pss-cta-section">
-        <div className="container" style={{ textAlign: 'center', padding: '3.5rem 1.5rem' }}>
-          <p className="section-eyebrow" style={{ color: 'var(--secondary)' }}>Flexible Payments</p>
-          <h2 className="section-title">Pay in Installments</h2>
-          <p className="pss-cta-sub">Get the hair you love now and pay over time. Split your purchase into easy monthly payments.</p>
-          <Link to="/products" className="btn-hero-primary">Start Shopping</Link>
+      {/* VALUE PROPS */}
+      <section className="values-section">
+        <div className="container values-grid">
+          <div className="value-item">
+            <Star size={32} />
+            <h3>Premium Grade</h3>
+            <p>Sourced from the finest donors. Double drawn, full to the ends, and built to last years with proper care.</p>
+          </div>
+          <div className="value-item">
+            <ShieldCheck size={32} />
+            <h3>Quality Guaranteed</h3>
+            <p>Every bundle undergoes a rigorous 5-step quality inspection before it reaches your hands.</p>
+          </div>
+          <div className="value-item">
+            <Heart size={32} />
+            <h3>Pay Small Small</h3>
+            <p>Can't pay all at once? We offer flexible installment plans up to 30 days to make luxury accessible.</p>
+          </div>
         </div>
+      </section>
+
+      {/* CATEGORY BANNER */}
+      <section className="categories-banner container">
+        <a href="/products?cat=Bundles" className="cat-card bundles">
+          <div className="overlay" />
+          <div className="content">
+            <h3>Virgin Bundles</h3>
+            <span className="link-text">Shop Now <ArrowRight size={14}/></span>
+          </div>
+        </a>
+        <a href="/products?cat=Wigs" className="cat-card wigs">
+          <div className="overlay" />
+          <div className="content">
+            <h3>Ready to Wear Wigs</h3>
+            <span className="link-text">Shop Now <ArrowRight size={14}/></span>
+          </div>
+        </a>
       </section>
 
       <Footer />
