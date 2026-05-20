@@ -1,6 +1,6 @@
 import { useState } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
-import { createUserWithEmailAndPassword } from 'firebase/auth';
+import { createUserWithEmailAndPassword, sendEmailVerification } from 'firebase/auth';
 import { auth, db } from '../firebase';
 import { doc, setDoc } from 'firebase/firestore';
 import Footer from '../components/Footer';
@@ -15,6 +15,7 @@ export default function Register() {
     password: ''
   });
   const [error, setError] = useState('');
+  const [successMessage, setSuccessMessage] = useState('');
   const [loading, setLoading] = useState(false);
 
   const handleChange = (e) => {
@@ -24,11 +25,15 @@ export default function Register() {
   const handleRegister = async (e) => {
     e.preventDefault();
     setError('');
+    setSuccessMessage('');
     setLoading(true);
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
       const user = userCredential.user;
       
+      // Send email verification link
+      await sendEmailVerification(user);
+
       // Save extra user details to Firestore
       await setDoc(doc(db, "users", user.uid), {
         firstName: formData.firstName,
@@ -41,10 +46,19 @@ export default function Register() {
       if (formData.email === 'zenobianewworld@gmail.com') {
         navigate('/admin');
       } else {
-        navigate('/shop');
+        setSuccessMessage('Account created successfully! A verification link has been sent to your email.');
+        // Clear form
+        setFormData({ firstName: '', lastName: '', phone: '', email: '', password: '' });
       }
     } catch (err) {
-      setError(err.message || 'Failed to register');
+      // Firebase throws specific errors, we can format them nicely
+      if (err.code === 'auth/email-already-in-use') {
+        setError('This email is already registered. Please login instead.');
+      } else if (err.code === 'auth/weak-password') {
+        setError('Password is too weak. Please use at least 6 characters.');
+      } else {
+        setError(err.message || 'Failed to register. Make sure email/password authentication is enabled in your Firebase console.');
+      }
     } finally {
       setLoading(false);
     }
@@ -57,10 +71,11 @@ export default function Register() {
           <h1>Create Account</h1>
           <p className="sub">Join JD Good Hair today</p>
           {error && <div style={{ color: 'red', fontSize: '0.85rem', marginBottom: '1rem', background: '#fee2e2', padding: '0.5rem', borderRadius: '4px' }}>{error}</div>}
+          {successMessage && <div style={{ color: 'green', fontSize: '0.85rem', marginBottom: '1rem', background: '#dcfce7', padding: '0.5rem', borderRadius: '4px' }}>{successMessage}</div>}
           <form onSubmit={handleRegister}>
             <div className="form-group">
               <label>First Name</label>
-              <input type="text" name="firstName" placeholder="First name" required onChange={handleChange} />
+              <input type="text" name="firstName" value={formData.firstName} placeholder="First name" required onChange={handleChange} />
             </div>
             <div className="form-group">
               <label>Last Name</label>

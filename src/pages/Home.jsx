@@ -31,7 +31,7 @@ export default function Home() {
       <section className="hero-full">
         <div className="hero-full-bg">
           {/* Default to the primary hero image */}
-          <img src="/hero_banner_no_text_resized.png" alt="JD Good Hair - Luxury Hair Extensions" />
+          <img src="/hero-banner.jpg" alt="JD Good Hair - Luxury Hair Extensions" />
         </div>
         <div className="hero-full-overlay" />
         <div className="hero-full-content">
