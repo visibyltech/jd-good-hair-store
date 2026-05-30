@@ -1,9 +1,11 @@
 import { useState, useEffect } from 'react';
 import { NavLink, useNavigate, useLocation } from 'react-router-dom';
-import { Search, ShoppingBag, Menu, X, User, LogOut, Shield } from 'lucide-react';
+import { Search, ShoppingBag, Menu, X, User, LogOut, Shield, Bell } from 'lucide-react';
 import useAuthStore from '../store/useAuthStore';
 import useCartStore from '../store/useCartStore';
 import toast from 'react-hot-toast';
+import ConfirmModal from './ConfirmModal';
+import NotificationBell from './NotificationBell';
 import './Navbar.css';
 
 export default function Navbar() {
@@ -13,6 +15,7 @@ export default function Navbar() {
   const location = useLocation();
   const { user, isAdmin, logout } = useAuthStore();
   const { getTotalItems } = useCartStore();
+  const [showLogoutConfirm, setShowLogoutConfirm] = useState(false);
 
   const closeMobile = () => setMobileOpen(false);
 
@@ -29,10 +32,15 @@ export default function Navbar() {
   }, [location]);
 
   const handleLogout = async () => {
+    setShowLogoutConfirm(true);
+  };
+
+  const confirmLogout = async () => {
     await logout();
     toast.success('Signed out successfully');
     navigate('/');
     closeMobile();
+    setShowLogoutConfirm(false);
   };
 
   const totalItems = getTotalItems();
@@ -81,6 +89,7 @@ export default function Navbar() {
                 <NavLink to="/profile" className="action-icon" title="Profile">
                   <User size={20} strokeWidth={1.5} />
                 </NavLink>
+                <NotificationBell />
                 <button onClick={handleLogout} className="action-icon" title="Logout">
                   <LogOut size={20} strokeWidth={1.5} />
                 </button>
@@ -92,12 +101,14 @@ export default function Navbar() {
               </div>
             )}
 
-            <NavLink to="/cart" className="action-icon cart-action" aria-label="Cart">
-              <ShoppingBag size={20} strokeWidth={1.5} />
-              {totalItems > 0 && (
-                <span className="cart-badge">{totalItems}</span>
-              )}
-            </NavLink>
+            {!isAdmin && (
+              <NavLink to="/cart" className="action-icon cart-action" aria-label="Cart">
+                <ShoppingBag size={20} strokeWidth={1.5} />
+                {totalItems > 0 && (
+                  <span className="cart-badge">{totalItems}</span>
+                )}
+              </NavLink>
+            )}
 
             {/* Mobile menu button */}
             <button
@@ -150,6 +161,16 @@ export default function Navbar() {
           </div>
         </div>
       </div>
+
+      <ConfirmModal
+        isOpen={showLogoutConfirm}
+        onClose={() => setShowLogoutConfirm(false)}
+        onConfirm={confirmLogout}
+        title="Sign Out"
+        message="Are you sure you want to sign out?"
+        confirmLabel="Sign Out"
+        cancelLabel="Cancel"
+      />
     </>
   );
 }

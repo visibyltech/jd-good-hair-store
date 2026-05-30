@@ -108,13 +108,18 @@ export default function Login() {
                 </button>
               </div>
             </div>
-            <button type="submit" className="auth-submit" disabled={loading}>
-              {loading ? 'Signing in...' : 'Sign In'}
-            </button>
-          </form>
-          <div className="auth-link">
-            Don't have an account? <Link to="/register">Register</Link>
-          </div>
+<button type="submit" className="auth-submit" disabled={loading}>
+               {loading ? 'Signing in...' : 'Sign In'}
+             </button>
+           </form>
+           <div style={{ textAlign: 'right', marginTop: '0.5rem' }}>
+             <Link to="/forgot-password" style={{ fontSize: '0.85rem', color: 'var(--primary)', textDecoration: 'none' }}>
+               Forgot password?
+             </Link>
+           </div>
+           <div className="auth-link">
+             Don't have an account? <Link to="/register">Register</Link>
+           </div>
         </div>
       </div>
       <Footer />

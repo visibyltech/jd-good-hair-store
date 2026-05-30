@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import { ShoppingBag, ArrowLeft, ChevronDown } from 'lucide-react';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import Footer from '../components/Footer';
 import useCartStore from '../store/useCartStore';
@@ -23,27 +23,25 @@ export default function ProductDetail() {
 
   const [showInstallment, setShowInstallment] = useState(false);
   const [installments, setInstallments] = useState(2);
-  const [paymentFrequency, setPaymentFrequency] = useState('monthly');
+  const [paymentFrequency, setPaymentFrequency] = useState('weekly');
 
   useEffect(() => {
-    const fetchProduct = async () => {
-      setLoading(true);
-      try {
-        const docRef = doc(db, "products", id);
-        const docSnap = await getDoc(docRef);
-        if (docSnap.exists()) {
-          setProduct({ id: docSnap.id, ...docSnap.data() });
-        } else {
-          setError("Product not found");
-        }
-      } catch (err) {
-        console.error(err);
-        setError("Failed to load product");
-      } finally {
-        setLoading(false);
+    setLoading(true);
+    const docRef = doc(db, "products", id);
+    const unsubscribe = onSnapshot(docRef, (docSnap) => {
+      if (docSnap.exists()) {
+        setProduct({ id: docSnap.id, ...docSnap.data() });
+      } else {
+        setError("Product not found");
       }
-    };
-    fetchProduct();
+      setLoading(false);
+    }, (err) => {
+      console.error(err);
+      setError("Failed to load product");
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
   }, [id]);
 
   if (loading) {
@@ -136,23 +134,7 @@ export default function ProductDetail() {
                   {/* Installment count selector */}
                   <div className="pd-select-group">
                     <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                      <label className="pd-select-label">Duration (Months)</label>
-                      <div style={{ display: 'flex', background: 'var(--muted)', borderRadius: '999px', padding: '0.2rem' }}>
-                        <button
-                          className={`pss-btn ${paymentFrequency === 'monthly' ? 'active' : ''}`}
-                          style={{ border: 'none', background: paymentFrequency === 'monthly' ? 'white' : 'transparent', boxShadow: paymentFrequency === 'monthly' ? 'var(--shadow-card)' : 'none', padding: '0.3rem 0.8rem', borderRadius: '999px', transition: 'all 0.2s' }}
-                          onClick={() => setPaymentFrequency('monthly')}
-                        >
-                          Monthly
-                        </button>
-                        <button
-                          className={`pss-btn ${paymentFrequency === 'weekly' ? 'active' : ''}`}
-                          style={{ border: 'none', background: paymentFrequency === 'weekly' ? 'white' : 'transparent', boxShadow: paymentFrequency === 'weekly' ? 'var(--shadow-card)' : 'none', padding: '0.3rem 0.8rem', borderRadius: '999px', transition: 'all 0.2s' }}
-                          onClick={() => setPaymentFrequency('weekly')}
-                        >
-                          Weekly
-                        </button>
-                      </div>
+                      <label className="pd-select-label">Duration (Weeks)</label>
                     </div>
                     <div className="pd-installment-pills" style={{ marginTop: '0.5rem' }}>
                       {[2, 3, 4, 5, 6].map(n => (
@@ -187,17 +169,21 @@ export default function ProductDetail() {
                       <span><strong>{fmt(total)}</strong></span>
                     </div>
                     <div className="pd-breakdown-row pd-monthly-row">
-                      <span>{paymentFrequency === 'monthly' ? 'Monthly payment' : 'Weekly payment'}</span>
-                      <span className="pd-monthly-amt">{fmt(periodPayment)} / {paymentFrequency === 'weekly' ? 'wk' : 'mo'}</span>
+                      <span>Weekly payment</span>
+                      <span className="pd-monthly-amt">{fmt(periodPayment)} / wk</span>
                     </div>
                     <p className="pd-inst-note">
                       × {totalPeriods} {paymentFrequency} payments of {fmt(periodPayment)}{' '}
                       {interestAmt > 0 ? `(includes ${INTEREST[installments]}% interest)` : '(0% interest)'}
                     </p>
                   </div>
+                  
+                  <div style={{ background: 'var(--background)', border: '1px solid var(--border)', borderRadius: '6px', padding: '0.75rem', marginTop: '1rem', fontSize: '0.75rem', color: 'var(--muted-fg)', lineHeight: '1.4' }}>
+                    <strong style={{ color: 'var(--foreground)' }}>How multi-item orders work:</strong> Items with the exact same payment plan are processed together. If you mix items with different installment durations or frequencies (e.g. 4 Weeks vs 5 Weeks), you will be asked to either merge them into one plan or check out as separate orders.
+                  </div>
 
                   <button className="pd-installment-btn" style={{ width: '100%', height: '3rem', background: 'var(--card-bg)', color: 'var(--foreground)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', fontWeight: '600', fontSize: '0.95rem', cursor: 'pointer', transition: 'all 0.2s', marginTop: '1rem' }} onClick={handleInstallment}>
-                    Start {paymentFrequency === 'weekly' ? 'Weekly' : 'Monthly'} Plan — {fmt(periodPayment)}/{paymentFrequency === 'weekly' ? 'wk' : 'mo'}
+                    Start Weekly Plan — {fmt(periodPayment)}/wk
                   </button>
                 </div>
               )}

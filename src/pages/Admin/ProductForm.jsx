@@ -1,167 +1,722 @@
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { useNavigate, useParams, Link } from 'react-router-dom';
-import { doc, getDoc, setDoc, updateDoc, collection } from 'firebase/firestore';
+import { doc, getDoc, setDoc, updateDoc, collection, query, where, getDocs } from 'firebase/firestore';
 import { db } from '../../firebase';
-import { ArrowLeft } from 'lucide-react';
+import {
+  ArrowLeft, Save, Image as ImageIcon, AlertCircle,
+  Tag, Ruler, DollarSign, Star, Upload, X, CheckCircle2, Sparkles, Infinity
+} from 'lucide-react';
 import { uploadImage } from '../../utils/uploadImage';
 import toast from 'react-hot-toast';
+
+const CATEGORIES = ['Bundles', 'Wigs', 'Closures', 'Frontals'];
+
+const CATEGORY_COLORS = {
+  'Bundles':  { bg: 'rgba(59,130,246,0.12)', text: '#3b82f6', border: 'rgba(59,130,246,0.35)' },
+  'Wigs':     { bg: 'rgba(139,92,246,0.12)', text: '#7c3aed', border: 'rgba(139,92,246,0.35)' },
+  'Closures': { bg: 'rgba(236,72,153,0.12)', text: '#db2777', border: 'rgba(236,72,153,0.35)' },
+  'Frontals': { bg: 'rgba(245,158,11,0.12)', text: '#d97706', border: 'rgba(245,158,11,0.35)' }
+};
 
 export default function ProductForm() {
   const { id } = useParams();
   const navigate = useNavigate();
   const isEditing = !!id;
+  const fileInputRef = useRef(null);
+  const [dragOver, setDragOver] = useState(false);
 
   const [formData, setFormData] = useState({
     name: '',
     category: 'Bundles',
     length: '18"',
+    brand: '',
+    description: '',
     price: '',
     pss: '',
+    tag: '',
     featured: false,
-    img: ''
+    featuredPosition: '',
+    img: '',
+    items_left: 0,
+    unlimited_stock: false,
+    inventory_status: 'in_stock',
+    is_hidden: false
   });
   const [imageFile, setImageFile] = useState(null);
+  const [imagePreview, setImagePreview] = useState(null);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
+  const [featuredProducts, setFeaturedProducts] = useState([]);
+  const [showFeaturedModal, setShowFeaturedModal] = useState(false);
+  const [positionInput, setPositionInput] = useState('');
 
   useEffect(() => {
     if (isEditing) {
       const fetchProduct = async () => {
         try {
-          const docRef = doc(db, "products", id);
+          const docRef = doc(db, 'products', id);
           const docSnap = await getDoc(docRef);
           if (docSnap.exists()) {
-            setFormData(docSnap.data());
+            const data = docSnap.data();
+            setFormData(data);
+            if (data.featured) {
+              setPositionInput(data.featuredPosition || '');
+            }
           } else {
-            setError("Product not found");
+            setError('Product not found');
           }
         } catch {
-          setError("Failed to load product");
+          setError('Failed to load product');
         }
       };
       fetchProduct();
     }
   }, [id, isEditing]);
 
+  // Fetch featured products list
+  useEffect(() => {
+    const fetchFeatured = async () => {
+      try {
+        const q = query(collection(db, "products"), where("featured", "==", true));
+        const snap = await getDocs(q);
+        const featured = snap.docs.map(d => ({ id: d.id, ...d.data() })).sort((a, b) => (a.featuredPosition || 999) - (b.featuredPosition || 999));
+        setFeaturedProducts(featured);
+      } catch (err) {
+        console.error('Error fetching featured products:', err);
+      }
+    };
+    fetchFeatured();
+  }, []);
+
   const handleChange = (e) => {
     const { name, value, type, checked } = e.target;
-    setFormData(prev => ({
-      ...prev,
-      [name]: type === 'checkbox' ? checked : value
-    }));
+    setFormData(prev => ({ ...prev, [name]: type === 'checkbox' ? checked : value }));
   };
 
-  const handleImageChange = (e) => {
-    if (e.target.files[0]) {
-      setImageFile(e.target.files[0]);
-    }
+  const processFile = (file) => {
+    if (!file) return;
+    setImageFile(file);
+    const reader = new FileReader();
+    reader.onloadend = () => setImagePreview(reader.result);
+    reader.readAsDataURL(file);
+  };
+
+  const handleImageChange = (e) => processFile(e.target.files[0]);
+
+  const handleDrop = (e) => {
+    e.preventDefault();
+    setDragOver(false);
+    processFile(e.dataTransfer.files[0]);
+  };
+
+  const clearImage = () => {
+    setImageFile(null);
+    setImagePreview(null);
+    if (fileInputRef.current) fileInputRef.current.value = '';
   };
 
   const handleSubmit = async (e) => {
     e.preventDefault();
+    
+    // Confirmation dialog
+    const confirmMsg = isEditing 
+      ? `Are you sure you want to update "${formData.name}"?` 
+      : `Add "${formData.name}" to products?`;
+    
+    if (!window.confirm(confirmMsg)) {
+      return;
+    }
+
     setLoading(true);
     setError('');
 
     try {
       let imageUrl = formData.img;
+      if (imageFile) imageUrl = await uploadImage(imageFile);
+      if (!imageUrl) throw new Error('Product image is required');
 
-      // 1. Upload image if a new one was selected
-      if (imageFile) {
-        imageUrl = await uploadImage(imageFile);
-      }
-
-      if (!imageUrl) {
-        throw new Error("Product image is required");
-      }
-
-      // 2. Prepare payload
       const payload = {
         ...formData,
         price: Number(formData.price),
-        pss: Number(formData.pss),
+        pss: Number(formData.pss || 0),
+        brand: formData.brand || '',
+        description: formData.description || '',
+        tag: formData.tag || '',
         img: imageUrl,
+        featured: formData.featured,
+        featuredPosition: formData.featured ? Number(positionInput) || 0 : '',
+        items_left: Number(formData.items_left || 0),
+        unlimited_stock: formData.unlimited_stock || false,
+        inventory_status: formData.unlimited_stock ? 'in_stock' : (Number(formData.items_left || 0) === 0 ? 'out_of_stock' : (formData.inventory_status || 'in_stock')),
+        is_hidden: Boolean(formData.is_hidden),
         updatedAt: new Date()
       };
 
-      // 3. Save to Firestore
       if (isEditing) {
-        await updateDoc(doc(db, "products", id), payload);
+        await updateDoc(doc(db, 'products', id), payload);
         toast.success('Product updated successfully!');
       } else {
-        const newRef = doc(collection(db, "products"));
+        const newRef = doc(collection(db, 'products'));
         payload.createdAt = new Date();
         await setDoc(newRef, payload);
         toast.success('Product created successfully!');
       }
-
       navigate('/admin');
     } catch (err) {
-      if (err.message && err.message.toLowerCase().includes('offline')) {
+      if (err.message?.toLowerCase().includes('offline')) {
         setError('Please check your internet connection and try again.');
       } else {
-        setError('Failed to save product. Please try again later.');
+        setError(err.message || 'Failed to save product. Please try again later.');
       }
     } finally {
       setLoading(false);
     }
   };
 
+  const handleFeaturedToggle = () => {
+    if (!formData.featured) {
+      // Toggling ON - show modal for position
+      setPositionInput(formData.featuredPosition || String(featuredProducts.length + 1));
+      setShowFeaturedModal(true);
+    } else {
+      // Toggling OFF - just disable it
+      setFormData(prev => ({ ...prev, featured: false, featuredPosition: '' }));
+    }
+  };
+
+  const handleSetFeaturedPosition = () => {
+    if (!positionInput || isNaN(positionInput)) {
+      alert('Please enter a valid position number');
+      return;
+    }
+    setFormData(prev => ({ 
+      ...prev, 
+      featured: true, 
+      featuredPosition: positionInput 
+    }));
+    setShowFeaturedModal(false);
+  };
+
+  const catColor = CATEGORY_COLORS[formData.category] || CATEGORY_COLORS['Bundles'];
+  const currentImg = imagePreview || formData.img;
+  const hasDiscount = formData.pss && formData.price && Number(formData.pss) < Number(formData.price);
+  const discountPct = hasDiscount
+    ? Math.round(100 - (Number(formData.pss) / Number(formData.price)) * 100)
+    : 0;
+
   return (
-    <div style={{ background: 'var(--card)', padding: '1.5rem', borderRadius: 'var(--radius)', boxShadow: 'var(--shadow-card)', maxWidth: '600px', margin: '0 auto' }}>
-      <Link to="/admin" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', color: 'var(--muted-fg)', marginBottom: '1.5rem', textDecoration: 'none' }}>
-        <ArrowLeft size={16} /> Back to Products
+    <div style={{ maxWidth: 760, margin: '0 auto' }}>
+      {/* Back link */}
+      <Link
+        to="/admin"
+        style={{
+          display: 'inline-flex', alignItems: 'center', gap: 8,
+          fontSize: 12, fontWeight: 700, color: '#6b7280',
+          textDecoration: 'none', textTransform: 'uppercase', letterSpacing: '0.1em',
+          marginBottom: 24, transition: 'color 0.2s'
+        }}
+        onMouseEnter={e => e.currentTarget.style.color = 'var(--primary)'}
+        onMouseLeave={e => e.currentTarget.style.color = '#6b7280'}
+      >
+        <ArrowLeft size={15} /> Back to Products
       </Link>
-      
-      <h1 style={{ fontSize: '1.5rem', fontFamily: 'var(--font-display)', marginBottom: '1.5rem' }}>
-        {isEditing ? 'Edit Product' : 'Add New Product'}
-      </h1>
 
-      {error && <div style={{ color: 'red', marginBottom: '1rem', padding: '0.5rem', background: '#fee2e2', borderRadius: '4px' }}>{error}</div>}
+      {/* Card */}
+      <div style={{
+        background: 'linear-gradient(135deg,#fff 0%,#fdf2f8 100%)',
+        borderRadius: 20, border: '1px solid #e5e7eb',
+        boxShadow: '0 8px 40px rgba(0,0,0,0.07)',
+        overflow: 'hidden'
+      }}>
 
-      <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: '1rem' }}>
-        <div className="form-group">
-          <label>Product Name</label>
-          <input type="text" name="name" value={formData.name} onChange={handleChange} required />
-        </div>
-
-        <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(240px, 1fr))', gap: '1rem' }}>
-          <div className="form-group">
-            <label>Category</label>
-            <select name="category" value={formData.category} onChange={handleChange} style={{ padding: '0.75rem', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
-              <option>Bundles</option>
-              <option>Wigs</option>
-              <option>Closures</option>
-              <option>Frontals</option>
-            </select>
+        {/* Header banner */}
+        <div style={{
+          background: 'linear-gradient(135deg,var(--primary) 0%,#be123c 60%,#881337 100%)',
+          padding: '28px 36px',
+          display: 'flex', alignItems: 'center', justifyContent: 'space-between'
+        }}>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, marginBottom: 4 }}>
+              <Sparkles size={18} color="#f59e0b" />
+              <span style={{ color: '#f59e0b', fontSize: 11, fontWeight: 800, textTransform: 'uppercase', letterSpacing: '0.15em' }}>
+                Product Management
+              </span>
+            </div>
+            <h1 style={{ margin: 0, color: '#fff', fontSize: 26, fontWeight: 900, letterSpacing: '-0.02em' }}>
+              {isEditing ? '✏️ Edit Product' : '✨ Add New Product'}
+            </h1>
           </div>
-          <div className="form-group">
-            <label>Length (e.g. 18")</label>
-            <input type="text" name="length" value={formData.length} onChange={handleChange} required />
-          </div>
-        </div>
-
-        <div className="form-group">
-          <label>Full Price (₦)</label>
-          <input type="number" name="price" value={formData.price} onChange={handleChange} required />
-        </div>
-
-        <div className="form-group">
-          <label>Product Image</label>
-          <input type="file" accept="image/*" onChange={handleImageChange} style={{ padding: '0.5rem 0' }} />
-          {formData.img && !imageFile && (
-            <img src={formData.img} alt="Current" loading="lazy" decoding="async" style={{ width: '100px', marginTop: '0.5rem', borderRadius: '4px' }} />
+          {currentImg && (
+            <div style={{
+              width: 64, height: 64, borderRadius: 12,
+              border: '2px solid rgba(255,255,255,0.2)',
+              overflow: 'hidden', background: '#fff',
+              display: 'flex', alignItems: 'center', justifyContent: 'center'
+            }}>
+              <img src={currentImg} alt="preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+            </div>
           )}
         </div>
 
-        <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-          <input type="checkbox" name="featured" id="featured" checked={formData.featured} onChange={handleChange} />
-          <label htmlFor="featured" style={{ cursor: 'pointer' }}>Feature on homepage?</label>
-        </div>
+        {/* Form body */}
+        <div style={{ padding: '36px' }}>
+          {error && (
+            <div style={{
+              background: 'linear-gradient(135deg,#fef2f2,#fee2e2)',
+              border: '1px solid #fca5a5', borderRadius: 12,
+              padding: '14px 18px', marginBottom: 24,
+              display: 'flex', alignItems: 'center', gap: 10,
+              color: '#dc2626', fontWeight: 600, fontSize: 14
+            }}>
+              <AlertCircle size={18} /> {error}
+            </div>
+          )}
 
-        <button type="submit" className="buy-once-btn" style={{ width: '100%', justifyContent: 'center', marginTop: '1rem', height: '2.75rem', fontSize: '0.9rem' }} disabled={loading}>
-          {loading ? 'Saving...' : 'Save Product'}
-        </button>
-      </form>
+          <form onSubmit={handleSubmit} style={{ display: 'flex', flexDirection: 'column', gap: 24 }}>
+
+            {/* Product Name */}
+            <FieldGroup label="Product Name" icon={<Tag size={14} />} accent="#7c3aed">
+              <input
+                type="text" name="name" value={formData.name}
+                onChange={handleChange} required
+                placeholder="e.g. Bone Straight 18 inch"
+                style={inputStyle}
+                onFocus={e => { e.target.style.borderColor = '#7c3aed'; e.target.style.boxShadow = '0 0 0 3px rgba(124,58,237,0.12)'; }}
+                onBlur={e => { e.target.style.borderColor = '#e5e7eb'; e.target.style.boxShadow = 'none'; }}
+              />
+            </FieldGroup>
+
+            {/* Category + Length + Tag */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
+              <FieldGroup label="Category" icon={<Tag size={14} />} accent={catColor.text}>
+                <div style={{ position: 'relative' }}>
+                  <select
+                    name="category" value={formData.category} onChange={handleChange}
+                    style={{
+                      ...inputStyle,
+                      paddingLeft: 16, cursor: 'pointer',
+                      background: catColor.bg,
+                      borderColor: catColor.border,
+                      color: catColor.text, fontWeight: 700,
+                      appearance: 'none'
+                    }}
+                    onFocus={e => { e.target.style.boxShadow = `0 0 0 3px ${catColor.bg}`; }}
+                    onBlur={e => { e.target.style.boxShadow = 'none'; }}
+                  >
+                    {CATEGORIES.map(c => <option key={c} value={c}>{c}</option>)}
+                  </select>
+                  <div style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: catColor.text }}>▾</div>
+                </div>
+              </FieldGroup>
+
+              <FieldGroup label='Length' icon={<Ruler size={14} />} accent="#059669">
+                <input
+                  type="text" name="length" value={formData.length}
+                  onChange={handleChange} required placeholder='e.g. 18"'
+                  style={inputStyle}
+                  onFocus={e => { e.target.style.borderColor = '#059669'; e.target.style.boxShadow = '0 0 0 3px rgba(5,150,105,0.12)'; }}
+                  onBlur={e => { e.target.style.borderColor = '#e5e7eb'; e.target.style.boxShadow = 'none'; }}
+                />
+              </FieldGroup>
+
+              <FieldGroup label="Product Tag" icon={<Sparkles size={14} />} accent="#ec4899">
+                <div style={{ position: 'relative' }}>
+                  <select
+                    name="tag" value={formData.tag || ''} onChange={handleChange}
+                    style={{
+                      ...inputStyle,
+                      paddingLeft: 16, cursor: 'pointer',
+                      appearance: 'none'
+                    }}
+                    onFocus={e => { e.target.style.borderColor = '#ec4899'; e.target.style.boxShadow = '0 0 0 3px rgba(236,72,153,0.12)'; }}
+                    onBlur={e => { e.target.style.borderColor = '#e5e7eb'; e.target.style.boxShadow = 'none'; }}
+                  >
+                    <option value="">None</option>
+                    <option value="Top Seller">Top Seller</option>
+                    <option value="Premium Quality">Premium Quality</option>
+                    <option value="Fast Moving">Fast Moving</option>
+                    <option value="Best Deal">Best Deal</option>
+                    <option value="Hot Sale">Hot Sale</option>
+                    <option value="Clearance">Clearance</option>
+                  </select>
+                  <div style={{ position: 'absolute', right: 14, top: '50%', transform: 'translateY(-50%)', pointerEvents: 'none', color: '#6b7280' }}>▾</div>
+                </div>
+              </FieldGroup>
+            </div>
+
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr', gap: 16 }}>
+              <FieldGroup label="Brand / Type" icon={<Tag size={14} />} accent="#10b981">
+                <input
+                  type="text" name="brand" value={formData.brand || ''}
+                  onChange={handleChange} placeholder="e.g. Brazilian, Peruvian..."
+                  style={inputStyle}
+                  onFocus={e => { e.target.style.borderColor = '#10b981'; e.target.style.boxShadow = '0 0 0 3px rgba(16,185,129,0.12)'; }}
+                  onBlur={e => { e.target.style.borderColor = '#e5e7eb'; e.target.style.boxShadow = 'none'; }}
+                />
+              </FieldGroup>
+
+              <FieldGroup label="Product Description / Features" icon={<Sparkles size={14} />} accent="#8b5cf6">
+                <textarea
+                  name="description" value={formData.description || ''}
+                  onChange={handleChange} placeholder="Enter features separated by lines"
+                  style={{...inputStyle, minHeight: '120px', resize: 'vertical'}}
+                  onFocus={e => { e.target.style.borderColor = '#8b5cf6'; e.target.style.boxShadow = '0 0 0 3px rgba(139,92,246,0.12)'; }}
+                  onBlur={e => { e.target.style.borderColor = '#e5e7eb'; e.target.style.boxShadow = 'none'; }}
+                />
+              </FieldGroup>
+            </div>
+
+            {/* Prices */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+              <FieldGroup label="Full Price (₦)" icon={<DollarSign size={14} />} accent="var(--primary)">
+                <div style={{ position: 'relative' }}>
+                  <span style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontWeight: 700, fontSize: 14 }}>₦</span>
+                  <input
+                    type="number" name="price" value={formData.price}
+                    onChange={handleChange} required placeholder="150000"
+                    style={{ ...inputStyle, paddingLeft: 34 }}
+                    onFocus={e => { e.target.style.borderColor = 'var(--primary)'; e.target.style.boxShadow = '0 0 0 3px rgba(225,29,72,0.12)'; }}
+                    onBlur={e => { e.target.style.borderColor = '#e5e7eb'; e.target.style.boxShadow = 'none'; }}
+                  />
+                </div>
+              </FieldGroup>
+
+              <FieldGroup label="Sale Price (₦)" icon={<DollarSign size={14} />} accent="#dc2626">
+                <div style={{ position: 'relative' }}>
+                  <span style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontWeight: 700, fontSize: 14 }}>₦</span>
+                  <input
+                    type="number" name="pss" value={formData.pss}
+                    onChange={handleChange} placeholder="Optional discount price"
+                    style={{ ...inputStyle, paddingLeft: 34 }}
+                    onFocus={e => { e.target.style.borderColor = '#dc2626'; e.target.style.boxShadow = '0 0 0 3px rgba(220,38,38,0.12)'; }}
+                    onBlur={e => { e.target.style.borderColor = '#e5e7eb'; e.target.style.boxShadow = 'none'; }}
+                  />
+                  {hasDiscount && (
+                    <span style={{
+                      position: 'absolute', right: 12, top: '50%', transform: 'translateY(-50%)',
+                      background: 'linear-gradient(135deg,#dc2626,#ef4444)',
+                      color: '#fff', fontSize: 10, fontWeight: 800,
+                      padding: '2px 7px', borderRadius: 99, letterSpacing: '0.05em'
+                    }}>
+                      -{discountPct}% OFF
+                    </span>
+                  )}
+                </div>
+                <p style={{ margin: '4px 0 0', fontSize: 11, color: '#9ca3af' }}>Leave empty if no sale</p>
+              </FieldGroup>
+            </div>
+
+            {/* Inventory & Visibility */}
+            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 16 }}>
+              <FieldGroup label="Items Left" icon={<Tag size={14} />} accent="#059669">
+                <input
+                  type="number" name="items_left" value={formData.items_left}
+                  onChange={handleChange} required min="0" disabled={formData.unlimited_stock}
+                  style={{...inputStyle, opacity: formData.unlimited_stock ? 0.6 : 1}}
+                  onFocus={e => { e.target.style.borderColor = '#059669'; e.target.style.boxShadow = '0 0 0 3px rgba(5,150,105,0.12)'; }}
+                  onBlur={e => { e.target.style.borderColor = '#e5e7eb'; e.target.style.boxShadow = 'none'; }}
+                />
+              </FieldGroup>
+              <FieldGroup label="Unlimited Stock" icon={<Infinity size={14} />} accent="#059669">
+                <div style={{ display: 'flex', alignItems: 'center', height: '42px', paddingLeft: 10, background: formData.unlimited_stock ? '#ecfdf5' : '#fff', border: `1px solid ${formData.unlimited_stock ? '#a7f3d0' : '#e5e7eb'}`, borderRadius: 10 }}>
+                  <input
+                    type="checkbox" name="unlimited_stock" checked={formData.unlimited_stock}
+                    onChange={handleChange}
+                    style={{ width: 18, height: 18, cursor: 'pointer', accentColor: '#059669' }}
+                  />
+                  <span style={{ marginLeft: 8, fontSize: 13, fontWeight: 600, color: formData.unlimited_stock ? '#059669' : '#9ca3af' }}>Unlimited</span>
+                </div>
+                <p style={{ margin: '4px 0 0', fontSize: 11, color: '#9ca3af' }}>Never runs out of stock</p>
+              </FieldGroup>
+              <FieldGroup label="Inventory Status" icon={<CheckCircle2 size={14} />} accent="#059669">
+                <div style={{
+                  display: 'flex', alignItems: 'center', height: '42px', paddingLeft: 12,
+                  background: (formData.unlimited_stock || Number(formData.items_left || 0) > 0) ? '#ecfdf5' : '#fef2f2',
+                  border: `1px solid ${(formData.unlimited_stock || Number(formData.items_left || 0) > 0) ? '#a7f3d0' : '#fca5a5'}`,
+                  borderRadius: 10, fontWeight: 600, fontSize: 13,
+                  color: (formData.unlimited_stock || Number(formData.items_left || 0) > 0) ? '#059669' : '#dc2626'
+                }}>
+                  <i className={`fas ${(formData.unlimited_stock || Number(formData.items_left || 0) > 0) ? 'fa-check-circle' : 'fa-exclamation-circle'} mr-2`}></i>
+                  {formData.unlimited_stock || Number(formData.items_left || 0) > 0 ? 'In Stock' : 'Out of Stock'}
+                </div>
+                <p style={{ margin: '4px 0 0', fontSize: 11, color: '#9ca3af' }}>
+                  {formData.unlimited_stock ? 'Unlimited' : (Number(formData.items_left || 0) > 0 ? `${formData.items_left} available` : 'Out of stock')}
+                </p>
+              </FieldGroup>
+              <FieldGroup label="Hidden from Shop" icon={<AlertCircle size={14} />} accent="#dc2626">
+                <div style={{ display: 'flex', alignItems: 'center', height: '42px', paddingLeft: 10, background: formData.is_hidden ? '#fef2f2' : '#fff', border: `1px solid ${formData.is_hidden ? '#fca5a5' : '#e5e7eb'}`, borderRadius: 10 }}>
+                  <input
+                    type="checkbox" name="is_hidden" checked={formData.is_hidden}
+                    onChange={handleChange}
+                    style={{ width: 18, height: 18, cursor: 'pointer', accentColor: '#dc2626' }}
+                  />
+                  <span style={{ marginLeft: 8, fontSize: 13, fontWeight: 600, color: formData.is_hidden ? '#dc2626' : '#374151' }}>Hide Product</span>
+                </div>
+              </FieldGroup>
+            </div>
+
+            {/* Image Upload */}
+            <FieldGroup label="Product Image" icon={<ImageIcon size={14} />} accent="#f59e0b">
+              <div
+                onDrop={handleDrop}
+                onDragOver={e => { e.preventDefault(); setDragOver(true); }}
+                onDragLeave={() => setDragOver(false)}
+                onClick={() => fileInputRef.current?.click()}
+                style={{
+                  border: `2px dashed ${dragOver ? '#f59e0b' : '#d1d5db'}`,
+                  borderRadius: 14,
+                  padding: currentImg ? 16 : 40,
+                  background: dragOver ? 'rgba(245,158,11,0.06)' : '#fafafa',
+                  cursor: 'pointer',
+                  transition: 'all 0.2s',
+                  display: 'flex',
+                  flexDirection: currentImg ? 'row' : 'column',
+                  alignItems: 'center',
+                  justifyContent: currentImg ? 'flex-start' : 'center',
+                  gap: 16,
+                  position: 'relative'
+                }}
+              >
+                {currentImg ? (
+                  <>
+                    <div style={{
+                      width: 80, height: 80, borderRadius: 10, overflow: 'hidden',
+                      border: '2px solid #e5e7eb', flexShrink: 0,
+                      background: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center'
+                    }}>
+                      <img src={currentImg} alt="Preview" style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                    </div>
+                    <div>
+                      <p style={{ margin: 0, fontWeight: 700, fontSize: 13, color: '#111827' }}>
+                        {imageFile ? imageFile.name : 'Current Image'}
+                      </p>
+                      <p style={{ margin: '2px 0 0', fontSize: 12, color: '#6b7280' }}>Click or drop to replace</p>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={e => { e.stopPropagation(); clearImage(); }}
+                      style={{
+                        position: 'absolute', top: 10, right: 10,
+                        width: 26, height: 26, borderRadius: 99,
+                        background: '#dc2626', color: '#fff', border: 'none',
+                        cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center'
+                      }}
+                    >
+                      <X size={13} />
+                    </button>
+                  </>
+                ) : (
+                  <>
+                    <div style={{
+                      width: 56, height: 56, borderRadius: 12,
+                      background: 'linear-gradient(135deg,#fef3c7,#fde68a)',
+                      display: 'flex', alignItems: 'center', justifyContent: 'center'
+                    }}>
+                      <Upload size={24} color="#f59e0b" />
+                    </div>
+                    <div style={{ textAlign: 'center' }}>
+                      <p style={{ margin: 0, fontWeight: 700, fontSize: 14, color: '#374151' }}>
+                        Drop image here or <span style={{ color: '#f59e0b', textDecoration: 'underline' }}>browse</span>
+                      </p>
+                      <p style={{ margin: '4px 0 0', fontSize: 12, color: '#9ca3af' }}>PNG, JPG, WEBP up to 10MB</p>
+                    </div>
+                  </>
+                )}
+              </div>
+              <input
+                ref={fileInputRef}
+                type="file" accept="image/*"
+                onChange={handleImageChange}
+                style={{ display: 'none' }}
+              />
+            </FieldGroup>
+
+            {/* Featured toggle */}
+            <div
+              onClick={handleFeaturedToggle}
+              style={{
+                display: 'flex', alignItems: 'center', gap: 14,
+                padding: '16px 20px', borderRadius: 14, cursor: 'pointer',
+                border: `2px solid ${formData.featured ? 'rgba(245,158,11,0.4)' : '#e5e7eb'}`,
+                background: formData.featured
+                  ? 'linear-gradient(135deg,rgba(245,158,11,0.08),rgba(251,191,36,0.06))'
+                  : '#f9fafb',
+                transition: 'all 0.25s', userSelect: 'none'
+              }}
+            >
+              <div style={{
+                width: 48, height: 26, borderRadius: 99,
+                background: formData.featured ? 'linear-gradient(135deg,#f59e0b,#fbbf24)' : '#d1d5db',
+                position: 'relative', transition: 'all 0.25s', flexShrink: 0,
+                boxShadow: formData.featured ? '0 2px 8px rgba(245,158,11,0.4)' : 'none'
+              }}>
+                <div style={{
+                  position: 'absolute', top: 3, left: formData.featured ? 25 : 3,
+                  width: 20, height: 20, borderRadius: 99, background: '#fff',
+                  boxShadow: '0 1px 4px rgba(0,0,0,0.2)', transition: 'left 0.25s'
+                }} />
+              </div>
+              <div>
+                <div style={{ display: 'flex', alignItems: 'center', gap: 8, fontWeight: 700, fontSize: 14, color: '#111827' }}>
+                  <Star size={16} color={formData.featured ? '#f59e0b' : '#9ca3af'} fill={formData.featured ? '#f59e0b' : 'none'} />
+                  Feature on Homepage
+                </div>
+                <p style={{ margin: '2px 0 0', fontSize: 12, color: '#6b7280' }}>
+                  This product will appear in the featured section
+                </p>
+              </div>
+              {formData.featured && (
+                <span style={{
+                  marginLeft: 'auto', background: 'linear-gradient(135deg,#f59e0b,#fbbf24)',
+                  color: '#fff', fontSize: 10, fontWeight: 800,
+                  padding: '3px 10px', borderRadius: 99, letterSpacing: '0.08em'
+                }}>
+                  FEATURED
+                </span>
+              )}
+            </div>
+
+            {/* Submit */}
+            <button
+              type="submit" disabled={loading}
+              style={{
+                width: '100%', padding: '16px',
+                background: loading
+                  ? '#9ca3af'
+                  : 'linear-gradient(135deg,var(--primary) 0%,#be123c 60%,#881337 100%)',
+                color: '#fff', border: 'none', borderRadius: 14,
+                fontSize: 14, fontWeight: 800, letterSpacing: '0.08em',
+                textTransform: 'uppercase', cursor: loading ? 'not-allowed' : 'pointer',
+                display: 'flex', alignItems: 'center', justifyContent: 'center', gap: 10,
+                boxShadow: loading ? 'none' : '0 8px 24px rgba(225,29,72,0.35)',
+                transition: 'all 0.2s',
+                marginTop: 8
+              }}
+              onMouseEnter={e => { if (!loading) { e.currentTarget.style.transform = 'translateY(-2px)'; e.currentTarget.style.boxShadow = '0 12px 32px rgba(225,29,72,0.45)'; } }}
+              onMouseLeave={e => { e.currentTarget.style.transform = 'translateY(0)'; e.currentTarget.style.boxShadow = '0 8px 24px rgba(225,29,72,0.35)'; }}
+            >
+              {loading ? (
+                <><i className="fas fa-circle-notch fa-spin" /> Saving...</>
+              ) : (
+                <><CheckCircle2 size={18} /> {isEditing ? 'Update Product' : 'Save Product'}</>
+              )}
+            </button>
+
+            {/* Currently Featured Products */}
+            {formData.featured && featuredProducts.length > 0 && (
+              <div style={{
+                background: 'rgba(245,158,11,0.08)',
+                border: '1px solid rgba(245,158,11,0.3)',
+                borderRadius: 12,
+                padding: '14px 16px',
+                fontSize: 12,
+                color: '#92400e'
+              }}>
+                <div style={{ fontWeight: 700, marginBottom: 8 }}>Currently Featured Products:</div>
+                {featuredProducts.map((p, i) => (
+                  <div key={p.id} style={{ fontSize: 11, marginBottom: 4 }}>
+                    #{p.featuredPosition || (i+1)} - {p.name}
+                  </div>
+                ))}
+              </div>
+            )}
+          </form>
+
+          {/* Featured Position Modal */}
+          {showFeaturedModal && (
+            <div style={{
+              position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.5)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              zIndex: 1000
+            }}>
+              <div style={{
+                background: '#fff', borderRadius: 16,
+                padding: '28px', maxWidth: 400, boxShadow: '0 20px 60px rgba(0,0,0,0.3)'
+              }}>
+                <h2 style={{ margin: '0 0 12px', fontSize: 18, fontWeight: 800, color: '#1a1a2e' }}>
+                  Set Featured Position
+                </h2>
+                <p style={{ margin: '0 0 16px', fontSize: 13, color: '#6b7280' }}>
+                  Enter the position (1-12) where this product should appear in the featured section.
+                  {featuredProducts.length > 0 && (
+                    <> Currently {featuredProducts.length} products are featured.</>
+                  )}
+                </p>
+                <input
+                  type="number"
+                  min="1"
+                  max="12"
+                  value={positionInput}
+                  onChange={(e) => setPositionInput(e.target.value)}
+                  style={{
+                    width: '100%', padding: '12px', border: '1px solid #e5e7eb',
+                    borderRadius: 8, fontSize: 14, marginBottom: 16,
+                    boxSizing: 'border-box'
+                  }}
+                  placeholder="Position (1-12)"
+                  autoFocus
+                />
+                <div style={{ display: 'flex', gap: 12 }}>
+                  <button
+                    onClick={() => setShowFeaturedModal(false)}
+                    style={{
+                      flex: 1, padding: '12px', background: '#f3f4f6',
+                      border: 'none', borderRadius: 8, cursor: 'pointer',
+                      fontWeight: 700, color: '#374151', transition: 'all 0.2s'
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.background = '#e5e7eb'}
+                    onMouseLeave={e => e.currentTarget.style.background = '#f3f4f6'}
+                  >
+                    Cancel
+                  </button>
+                  <button
+                    onClick={handleSetFeaturedPosition}
+                    style={{
+                      flex: 1, padding: '12px',
+                      background: 'linear-gradient(135deg,#f59e0b,#fbbf24)',
+                      border: 'none', borderRadius: 8, cursor: 'pointer',
+                      fontWeight: 700, color: '#fff', transition: 'all 0.2s'
+                    }}
+                    onMouseEnter={e => e.currentTarget.style.transform = 'translateY(-2px)'}
+                    onMouseLeave={e => e.currentTarget.style.transform = 'translateY(0)'}
+                  >
+                    Set Position
+                  </button>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+      </div>
     </div>
   );
 }
+
+function FieldGroup({ label, icon, accent, children }) {
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: 8 }}>
+      <label style={{
+        display: 'flex', alignItems: 'center', gap: 6,
+        fontSize: 11, fontWeight: 800, textTransform: 'uppercase',
+        letterSpacing: '0.12em', color: accent || '#374151'
+      }}>
+        {icon} {label}
+      </label>
+      {children}
+    </div>
+  );
+}
+
+const inputStyle = {
+  width: '100%',
+  background: '#fff',
+  border: '1.5px solid #e5e7eb',
+  borderRadius: 10,
+  padding: '12px 16px',
+  fontSize: 14,
+  fontWeight: 500,
+  color: '#111827',
+  outline: 'none',
+  transition: 'all 0.2s',
+  boxSizing: 'border-box',
+};

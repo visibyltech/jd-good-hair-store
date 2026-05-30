@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react';
 import { motion } from 'framer-motion';
 import { Link, useNavigate } from 'react-router-dom';
 import { ArrowRight, Star, ShieldCheck, Heart, Eye } from 'lucide-react';
-import { collection, query, where, getDocs, limit } from 'firebase/firestore';
+import { collection, query, where, onSnapshot, limit } from 'firebase/firestore';
 import { db } from '../firebase';
 import Footer from '../components/Footer';
 
@@ -12,22 +12,20 @@ export default function Home() {
   const navigate = useNavigate();
 
   useEffect(() => {
-    const fetchFeatured = async () => {
-      try {
-        const q = query(collection(db, "products"), where("featured", "==", true), limit(4));
-        const querySnapshot = await getDocs(q);
-        const items = [];
-        querySnapshot.forEach((doc) => {
-          items.push({ id: doc.id, ...doc.data() });
-        });
-        setFeatured(items);
-      } catch (error) {
-        console.error("Error fetching featured products:", error);
-      } finally {
-        setFeatLoading(false);
-      }
-    };
-    fetchFeatured();
+    const q = query(collection(db, "products"), where("featured", "==", true), limit(4));
+    const unsubscribe = onSnapshot(q, (querySnapshot) => {
+      const items = [];
+      querySnapshot.forEach((doc) => {
+        items.push({ id: doc.id, ...doc.data() });
+      });
+      setFeatured(items);
+      setFeatLoading(false);
+    }, (error) => {
+      console.error("Error fetching featured products:", error);
+      setFeatLoading(false);
+    });
+
+    return () => unsubscribe();
   }, []);
 
   return (
@@ -46,7 +44,7 @@ export default function Home() {
             transition={{ duration: 0.8, ease: "easeOut" }}
           >
             <span className="hero-eyebrow">Luxury for Less</span>
-            <h1 className="hero-h1">PREMIUM HAIR EXTENSIONS</h1>
+            <h1 className="hero-h1">PREMIUM HAIR</h1>
             <p className="hero-sub">
               Discover our curated collection of 100% virgin human hair bundles, wigs, closures &amp; frontals.
             </p>

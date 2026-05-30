@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { useSearchParams, useLocation, Link, useNavigate } from 'react-router-dom';
 import { ShoppingBag, Search } from 'lucide-react';
-import { collection, getDocs } from 'firebase/firestore';
+import { collection, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import Footer from '../components/Footer';
 
@@ -35,22 +35,19 @@ export default function Shop() {
 
   // Fetch from Firestore
   useEffect(() => {
-    const fetchProducts = async () => {
-      setLoading(true);
-      try {
-        const querySnapshot = await getDocs(collection(db, "products"));
-        const items = [];
-        querySnapshot.forEach((doc) => {
-          items.push({ id: doc.id, ...doc.data() });
-        });
-        setProducts(items);
-      } catch (error) {
-        console.error("Error fetching products:", error);
-      } finally {
-        setLoading(false);
-      }
-    };
-    fetchProducts();
+    const unsubscribe = onSnapshot(collection(db, "products"), (querySnapshot) => {
+      const items = [];
+      querySnapshot.forEach((doc) => {
+        items.push({ id: doc.id, ...doc.data() });
+      });
+      setProducts(items);
+      setLoading(false);
+    }, (error) => {
+      console.error("Error fetching products:", error);
+      setLoading(false);
+    });
+
+    return () => unsubscribe();
   }, []);
 
   // Sync category state with URL
@@ -64,6 +61,7 @@ export default function Shop() {
   }, [location.search, location.pathname]);
 
   const filtered = products.filter(p => {
+    if (p.is_hidden) return false;
     const matchCat    = active === 'All' || p.category === active;
     const matchSearch = p.name.toLowerCase().includes(search.toLowerCase());
     return matchCat && matchSearch;
