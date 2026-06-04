@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { collection, doc, updateDoc, query, orderBy, getDoc, onSnapshot } from 'firebase/firestore';
 import { db } from '../../firebase';
-import { Package, CheckCircle, Clock, Bell, Users, AlertCircle, Search, ChevronDown, ChevronUp, SlidersHorizontal, Truck, Link as LinkIcon, Copy } from 'lucide-react';
+import { Package, CheckCircle, Clock, Bell, Users, AlertCircle, Search, ChevronDown, ChevronUp, SlidersHorizontal, Truck, Link as LinkIcon, Copy, X } from 'lucide-react';
 import { shipOrder } from '../../utils/orderTrackingService';
 
 function fmt(n) {
@@ -15,6 +15,7 @@ export default function AdminOrders() {
   const [updating, setUpdating] = useState(false);
   const [newlyCompleted, setNewlyCompleted] = useState(new Set());
   const [userCache, setUserCache] = useState({});
+  const [selectedCustomerProfile, setSelectedCustomerProfile] = useState(null);
 
   useEffect(() => {
     setLoading(true);
@@ -297,7 +298,10 @@ export default function AdminOrders() {
                     <strong className="text-sm text-gray-800">{order.createdAt?.toDate().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</strong>
                   </div>
                   
-                  <div className="flex items-center gap-3 min-w-[200px] flex-grow">
+                  <div 
+                    className="flex items-center gap-3 min-w-[200px] flex-grow hover:bg-gray-100 p-2 rounded transition-colors"
+                    onClick={(e) => { e.stopPropagation(); setSelectedCustomerProfile(order.userId); }}
+                  >
                     <div className="w-10 h-10 rounded-full bg-zeal-dark text-white flex items-center justify-center font-black text-sm flex-shrink-0">
                       {customer ? customer.firstName?.[0]?.toUpperCase() : <Users size={16} />}
                     </div>
@@ -348,7 +352,7 @@ export default function AdminOrders() {
                               <div className="font-bold text-sm text-gray-800 mb-1 leading-snug line-clamp-2">{item.name} <span className="text-gray-400 font-medium">×{item.quantity}</span></div>
                               <div className="text-xs font-medium text-gray-500 mb-2">Length: {item.length}</div>
                               <span className={`inline-block text-[10px] font-black px-2 py-1 rounded-sm uppercase tracking-wider ${item.paymentChoice === 'installment' ? 'bg-blue-50 text-blue-700' : 'bg-green-50 text-green-700'}`}>
-                                {item.paymentChoice === 'installment' ? `${item.paymentFrequency === 'weekly' ? item.installments * 4 + ' Weekly Payments' : item.installments + ' Monthly Payments'}` : 'Full Payment'}
+                                {item.paymentChoice === 'installment' ? `${item.paymentFrequency === 'weekly' ? item.installments + ' Weekly Payments' : item.installments + ' Monthly Payments'}` : 'Full Payment'}
                               </span>
                               <div className="text-xs font-bold mt-2">
                                 {item.paymentChoice === 'installment' && (item.periodPayment || item.monthlyPayment) ? (
@@ -488,6 +492,80 @@ export default function AdminOrders() {
           })}
         </div>
       )}
+
+      {/* Customer Profile Modal */}
+      {selectedCustomerProfile && (() => {
+        const profileUser = userCache[selectedCustomerProfile];
+        const userOrders = orders.filter(o => o.userId === selectedCustomerProfile).sort((a,b) => b.createdAt?.toMillis() - a.createdAt?.toMillis());
+        const lifetimeTotal = userOrders.reduce((acc, o) => acc + o.totalAmount, 0);
+        const lifetimePaid = userOrders.reduce((acc, o) => acc + o.amountPaid, 0);
+        const lifetimeOwed = lifetimeTotal - lifetimePaid;
+
+        return (
+          <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm" onClick={() => setSelectedCustomerProfile(null)}>
+            <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
+              
+              <div className="p-6 border-b border-gray-100 flex justify-between items-start bg-gray-50">
+                <div className="flex items-center gap-4">
+                  <div className="w-16 h-16 rounded-full bg-zeal-dark text-white flex items-center justify-center font-black text-2xl shadow-inner">
+                    {profileUser ? profileUser.firstName?.[0]?.toUpperCase() : <Users size={24} />}
+                  </div>
+                  <div>
+                    <h2 className="text-xl font-black font-display text-gray-900">
+                      {profileUser ? `${profileUser.firstName} ${profileUser.lastName}` : 'Unknown Customer'}
+                    </h2>
+                    <p className="text-sm font-medium text-gray-500">{profileUser?.email || selectedCustomerProfile}</p>
+                    {profileUser?.phone && <p className="text-xs text-gray-400 mt-1">{profileUser.phone}</p>}
+                  </div>
+                </div>
+                <button onClick={() => setSelectedCustomerProfile(null)} className="text-gray-400 hover:text-gray-600 p-2 rounded-full hover:bg-gray-200 transition-colors">
+                  <X size={20} />
+                </button>
+              </div>
+
+              <div className="grid grid-cols-3 gap-4 p-6 bg-white border-b border-gray-100">
+                <div className="bg-blue-50 border border-blue-100 p-4 rounded-lg">
+                  <div className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-1">Total Ordered</div>
+                  <div className="font-black text-xl text-blue-900">{fmt(lifetimeTotal)}</div>
+                </div>
+                <div className="bg-green-50 border border-green-100 p-4 rounded-lg">
+                  <div className="text-[10px] font-bold text-green-500 uppercase tracking-widest mb-1">Total Paid</div>
+                  <div className="font-black text-xl text-green-700">{fmt(lifetimePaid)}</div>
+                </div>
+                <div className={`p-4 rounded-lg border ${lifetimeOwed > 0 ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-200'}`}>
+                  <div className={`text-[10px] font-bold uppercase tracking-widest mb-1 ${lifetimeOwed > 0 ? 'text-amber-600' : 'text-gray-400'}`}>Outstanding Balance</div>
+                  <div className={`font-black text-xl ${lifetimeOwed > 0 ? 'text-amber-700' : 'text-gray-400'}`}>{fmt(lifetimeOwed)}</div>
+                </div>
+              </div>
+
+              <div className="p-6 overflow-y-auto flex-grow bg-gray-50">
+                <h3 className="text-sm font-bold text-gray-900 uppercase tracking-widest mb-4">Order History ({userOrders.length})</h3>
+                <div className="flex flex-col gap-3">
+                  {userOrders.map(o => (
+                    <div key={o.id} className="bg-white border border-gray-200 p-4 rounded-lg shadow-sm flex flex-wrap gap-4 justify-between items-center">
+                      <div>
+                        <div className="font-mono text-xs text-gray-500 mb-1">#{o.id}</div>
+                        <div className="text-sm font-bold text-gray-900">{o.createdAt?.toDate().toLocaleDateString()}</div>
+                      </div>
+                      <div className="text-right">
+                        <div className="font-bold text-sm text-gray-900">{fmt(o.totalAmount)}</div>
+                        <div className="text-xs text-gray-500">{fmt(o.amountPaid)} paid</div>
+                      </div>
+                      <div>
+                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${o.status === 'Completed' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}>
+                          {o.status}
+                        </span>
+                      </div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+
+            </div>
+          </div>
+        );
+      })()}
+
     </div>
   );
 }

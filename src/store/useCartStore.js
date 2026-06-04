@@ -7,26 +7,30 @@ const useCartStore = create(
     (set, get) => ({
       items: [],
       _hydrated: false,
+      isCartSidebarOpen: false, // For mini-cart sidebar
 
       setHydrated: () => set({ _hydrated: true }),
+      
+      toggleCartSidebar: (isOpen) => set({ isCartSidebarOpen: isOpen ?? !get().isCartSidebarOpen }),
 
       addToCart: (product, quantity = 1, paymentChoice = 'full', installments = 1, periodPayment = 0, paymentFrequency = 'monthly') => {
+        let isNewItem = false;
+        
         set((state) => {
-          // Check if item exists with same payment choice and frequency
           const existingItemIndex = state.items.findIndex(
             (item) => item.id === product.id && item.paymentChoice === paymentChoice && item.installments === installments && item.paymentFrequency === paymentFrequency
           );
 
           if (existingItemIndex > -1) {
-            // Update quantity
             const newItems = [...state.items];
-            newItems[existingItemIndex].quantity += quantity;
-            toast.success('Cart updated');
+            newItems[existingItemIndex] = {
+              ...newItems[existingItemIndex],
+              quantity: newItems[existingItemIndex].quantity + quantity
+            };
             return { items: newItems };
           }
 
-          // Add new item
-          toast.success('Added to cart');
+          isNewItem = true;
           return {
             items: [
               ...state.items,
@@ -42,6 +46,11 @@ const useCartStore = create(
             ]
           };
         });
+
+        // Outside set function to prevent double toasts in strict mode
+        toast.success(isNewItem ? 'Added to cart' : 'Cart updated');
+        // Open the mini-cart sidebar when an item is added
+        set({ isCartSidebarOpen: true });
       },
 
       removeFromCart: (cartItemId) => {
@@ -93,8 +102,7 @@ const useCartStore = create(
           if (item.paymentChoice === 'full') {
             return total + (item.price * item.quantity);
           } else {
-            // If they chose installment, we calculate the total amount they are committing to
-            const INTEREST = { 2: 0, 3: 10, 4: 10, 5: 20, 6: 20 };
+            const INTEREST = { 2: 5, 3: 10, 4: 10, 5: 20, 6: 20 };
             const rate = INTEREST[item.installments] / 100;
             const fullAmount = item.price * (1 + rate);
             return total + (fullAmount * item.quantity);
@@ -107,7 +115,6 @@ const useCartStore = create(
           if (item.paymentChoice === 'full') {
             return total + (item.price * item.quantity);
           } else {
-            // First period payment
             return total + ((item.periodPayment || item.monthlyPayment || 0) * item.quantity);
           }
         }, 0);
@@ -115,6 +122,7 @@ const useCartStore = create(
     }),
     {
       name: 'jd-good-hair-cart',
+      partialize: (state) => ({ items: state.items }), // Only persist items, not _hydrated or isCartSidebarOpen
       onRehydrateStorage: () => (state) => {
         if (state) state.setHydrated();
       },

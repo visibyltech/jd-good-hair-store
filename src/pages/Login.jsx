@@ -21,18 +21,11 @@ export default function Login() {
     setLoading(true);
     try {
       const userCredential = await signInWithEmailAndPassword(auth, email, password);
-      
-      // Admin bypass
-      if (email === 'zenobianewworld@gmail.com') {
-        toast.success('Successfully logged in!');
-        navigate('/admin');
-        return;
-      }
 
-      // Check Firestore for OTP verification
+      // Check Firestore for OTP verification status
       const userDocRef = doc(db, 'users', userCredential.user.uid);
       const userDocSnap = await getDoc(userDocRef);
-      
+
       if (userDocSnap.exists()) {
         const userData = userDocSnap.data();
         if (userData.isEmailVerified === false) {
@@ -40,13 +33,13 @@ export default function Login() {
           setError('Please verify your email before logging in.');
           toast.error('Please verify your email.');
           setLoading(false);
-          // Redirect to verify-otp page with their email prefilled
           navigate(`/verify-otp?email=${encodeURIComponent(email)}`);
           return;
         }
       }
 
       toast.success('Successfully logged in!');
+      // AdminLayout handles admin route protection — route everyone to shop
       navigate('/shop');
     } catch (err) {
       if (err.code === 'auth/invalid-credential' || err.code === 'auth/user-not-found' || err.code === 'auth/wrong-password') {
@@ -108,18 +101,18 @@ export default function Login() {
                 </button>
               </div>
             </div>
-<button type="submit" className="auth-submit" disabled={loading}>
-               {loading ? 'Signing in...' : 'Sign In'}
-             </button>
-           </form>
-           <div style={{ textAlign: 'right', marginTop: '0.5rem' }}>
-             <Link to="/forgot-password" style={{ fontSize: '0.85rem', color: 'var(--primary)', textDecoration: 'none' }}>
-               Forgot password?
-             </Link>
-           </div>
-           <div className="auth-link">
-             Don't have an account? <Link to="/register">Register</Link>
-           </div>
+            <button type="submit" className="auth-submit" disabled={loading}>
+              {loading ? 'Signing in...' : 'Sign In'}
+            </button>
+          </form>
+          <div style={{ textAlign: 'right', marginTop: '0.5rem' }}>
+            <Link to="/forgot-password" style={{ fontSize: '0.85rem', color: 'var(--primary)', textDecoration: 'none' }}>
+              Forgot password?
+            </Link>
+          </div>
+          <div className="auth-link">
+            Don't have an account? <Link to="/register">Register</Link>
+          </div>
         </div>
       </div>
       <Footer />

@@ -5,9 +5,9 @@ import { auth, db } from '../firebase';
 import { doc, setDoc, collection, addDoc, serverTimestamp } from 'firebase/firestore';
 import Footer from '../components/Footer';
 import { Eye, EyeOff, CheckCircle } from 'lucide-react';
-import emailjs from '@emailjs/browser';
 import toast from 'react-hot-toast';
 import LegalModal from '../components/LegalModal';
+import { generateAndStoreOTP } from '../utils/otpService';
 
 export default function Register() {
   const navigate = useNavigate();
@@ -70,9 +70,6 @@ export default function Register() {
       const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
       const user = userCredential.user;
 
-      const otpCode = Math.floor(100000 + Math.random() * 900000).toString();
-      const otpExpiresAt = new Date(Date.now() + 15 * 60 * 1000);
-
       // Sign out immediately so they must verify OTP first
       await auth.signOut();
 
@@ -83,45 +80,18 @@ export default function Register() {
         email: formData.email,
         isEmailVerified: false,
         isPhoneVerified: false,
-        otpCode: otpCode,
-        otpExpiresAt: otpExpiresAt,
         createdAt: new Date()
       });
 
-      if (formData.email === 'zenobianewworld@gmail.com') {
-        navigate('/admin');
-      } else {
-        // Send OTP via WhatsApp (triggers whatsapp-service listener)
-        try {
-          await addDoc(collection(db, 'otp_requests'), {
-            phone: finalPhone,
-            otpCode: otpCode,
-            status: 'pending',
-            createdAt: serverTimestamp()
-          });
-        } catch (waErr) {
-          console.error('WhatsApp OTP error:', waErr);
-        }
-
-        // Send OTP via Email as fallback
-        try {
-          await emailjs.send(
-            'service_mcu3hnj',
-            'template_643qpnq',
-            {
-              email: formData.email,
-              name: formData.firstName,
-              otp: otpCode,
-              code: otpCode
-            },
-            'A7Sq--0D6K2sijujF'
-          );
-        } catch (emailErr) {
-          console.error('EmailJS error:', emailErr);
-        }
-
-        navigate(`/verify-otp?email=${encodeURIComponent(formData.email)}`);
+      // Send OTP for all users — admin access is granted via Firestore role, not registration bypass
+      try {
+        await generateAndStoreOTP(formData.email, 'email_verification');
+      } catch (otpErr) {
+        console.error('OTP generation error:', otpErr);
+        toast.error('Failed to send verification email. You can resend it on the next page.');
       }
+
+      navigate(`/verify-otp?email=${encodeURIComponent(formData.email)}`);
     } catch (err) {
       if (err.code === 'auth/email-already-in-use') {
         setError('This email is already registered. Please login instead.');

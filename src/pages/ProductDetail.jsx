@@ -5,8 +5,10 @@ import { doc, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import Footer from '../components/Footer';
 import useCartStore from '../store/useCartStore';
+import { isProductInStock, getStockDisplayText } from '../utils/inventoryService';
 
-const INTEREST = { 2: 0, 3: 10, 4: 10, 5: 20, 6: 20 };
+// Interest tiers: 2 wks = 5%, 3–4 wks = 10%, 5–6 wks = 20%
+const INTEREST = { 2: 5, 3: 10, 4: 10, 5: 20, 6: 20 };
 
 function fmt(n) {
   return '₦' + Math.ceil(n).toLocaleString('en-NG');
@@ -71,7 +73,7 @@ export default function ProductDetail() {
   const rate        = INTEREST[installments] / 100;
   const total       = price * (1 + rate);
   
-  const totalPeriods = paymentFrequency === 'weekly' ? installments * 4 : installments;
+  const totalPeriods = installments;
   const periodPayment = total / totalPeriods;
   const interestAmt = total - price;
 
@@ -105,7 +107,19 @@ export default function ProductDetail() {
           <div className="pd-info-col">
             <p className="pd-category">{product.category}</p>
             <h1 className="pd-title">{product.name}</h1>
-            <span className="pd-length-badge">{product.length}</span>
+            <div style={{ display: 'flex', gap: '1rem', alignItems: 'center', marginBottom: '1rem' }}>
+              <span className="pd-length-badge">{product.length}</span>
+              <span style={{ 
+                fontSize: '0.8rem', 
+                fontWeight: '700', 
+                color: isProductInStock(product) ? '#16a34a' : '#dc2626',
+                background: isProductInStock(product) ? '#dcfce7' : '#fee2e2',
+                padding: '0.2rem 0.6rem',
+                borderRadius: '1rem'
+              }}>
+                {getStockDisplayText(product)}
+              </span>
+            </div>
 
             {/* Pricing card */}
             <div className="pd-pricing-card">
@@ -121,6 +135,8 @@ export default function ProductDetail() {
               <button
                 className="pd-installment-toggle"
                 onClick={() => setShowInstallment(v => !v)}
+                disabled={!isProductInStock(product)}
+                style={{ opacity: isProductInStock(product) ? 1 : 0.5, cursor: isProductInStock(product) ? 'pointer' : 'not-allowed' }}
               >
                 Pay in Installments
                 <ChevronDown
@@ -153,17 +169,12 @@ export default function ProductDetail() {
                   <div className="pd-breakdown">
                     <div className="pd-breakdown-row">
                       <span>Interest rate</span>
-                      <span className={INTEREST[installments] > 0 ? 'pd-highlight' : 'pd-zero'}>
-                        {INTEREST[installments]}%
-                        {INTEREST[installments] === 0 && ' 🎉'}
-                      </span>
+                      <span className="pd-highlight">{INTEREST[installments]}%</span>
                     </div>
-                    {interestAmt > 0 && (
-                      <div className="pd-breakdown-row">
-                        <span>Interest added</span>
-                        <span className="pd-highlight">{fmt(interestAmt)}</span>
-                      </div>
-                    )}
+                    <div className="pd-breakdown-row">
+                      <span>Interest added</span>
+                      <span className="pd-highlight">{fmt(interestAmt)}</span>
+                    </div>
                     <div className="pd-breakdown-row">
                       <span>Total to pay</span>
                       <span><strong>{fmt(total)}</strong></span>
@@ -173,8 +184,7 @@ export default function ProductDetail() {
                       <span className="pd-monthly-amt">{fmt(periodPayment)} / wk</span>
                     </div>
                     <p className="pd-inst-note">
-                      × {totalPeriods} {paymentFrequency} payments of {fmt(periodPayment)}{' '}
-                      {interestAmt > 0 ? `(includes ${INTEREST[installments]}% interest)` : '(0% interest)'}
+                      × {installments} weekly payments of {fmt(periodPayment)} (includes {INTEREST[installments]}% interest)
                     </p>
                   </div>
                   
@@ -190,9 +200,14 @@ export default function ProductDetail() {
             </div>
 
             {/* Buy once button */}
-            <button className="pd-buy-btn" onClick={handleBuyOnce}>
+            <button 
+              className="pd-buy-btn" 
+              onClick={handleBuyOnce}
+              disabled={!isProductInStock(product)}
+              style={{ opacity: isProductInStock(product) ? 1 : 0.5, cursor: isProductInStock(product) ? 'pointer' : 'not-allowed' }}
+            >
               <ShoppingBag size={18} />
-              Buy Once — {fmt(price)}
+              {isProductInStock(product) ? `Buy Once — ${fmt(price)}` : 'Out of Stock'}
             </button>
           </div>
         </div>

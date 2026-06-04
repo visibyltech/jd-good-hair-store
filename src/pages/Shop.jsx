@@ -4,6 +4,7 @@ import { ShoppingBag, Search } from 'lucide-react';
 import { collection, onSnapshot } from 'firebase/firestore';
 import { db } from '../firebase';
 import Footer from '../components/Footer';
+import { isProductInStock, getStockDisplayText } from '../utils/inventoryService';
 
 const CATEGORIES = ['All', 'Bundles', 'Wigs', 'Closures', 'Frontals'];
 
@@ -122,26 +123,52 @@ export default function Shop() {
                 </Link>
 
                 <div className="info">
-                  <Link to={`/products/${p.id}`} onClick={e => e.stopPropagation()}>
+                  <Link to={`/products/${p.id}`} onClick={e => e.stopPropagation()} style={{ textDecoration: 'none' }}>
                     <h3>{p.name}</h3>
                   </Link>
-                  <p className="feat-length">{p.length}</p>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '0.25rem' }}>
+                    <p className="feat-length" style={{ margin: 0 }}>{p.length}</p>
+                    <span style={{ 
+                      fontSize: '0.65rem', 
+                      fontWeight: '700', 
+                      color: isProductInStock(p) ? '#16a34a' : '#dc2626',
+                      background: isProductInStock(p) ? '#dcfce7' : '#fee2e2',
+                      padding: '0.1rem 0.4rem',
+                      borderRadius: '0.5rem',
+                      textTransform: 'uppercase'
+                    }}>
+                      {getStockDisplayText(p)}
+                    </span>
+                  </div>
                   <div className="price">₦{Number(p.price).toLocaleString()}</div>
 
                   <div className="card-actions">
-                    <button 
-                      className="pss-btn"
-                      onClick={(e) => { e.stopPropagation(); navigate(`/products/${p.id}`); }}
-                    >
-                      Pay Small Small
-                    </button>
-                    <button 
-                      className="buy-once-btn"
-                      onClick={(e) => { e.stopPropagation(); navigate(`/products/${p.id}`); }}
-                    >
-                      <ShoppingBag size={14} />
-                      Buy Once
-                    </button>
+                    {isProductInStock(p) ? (
+                      <>
+                        <button 
+                          className="pss-btn"
+                          onClick={(e) => { e.stopPropagation(); navigate(`/products/${p.id}`); }}
+                        >
+                          Pay Small Small
+                        </button>
+                        <button 
+                          className="buy-once-btn"
+                          onClick={(e) => { e.stopPropagation(); navigate(`/products/${p.id}`); }}
+                        >
+                          <ShoppingBag size={14} />
+                          Buy Once
+                        </button>
+                      </>
+                    ) : (
+                      <button 
+                        className="buy-once-btn"
+                        disabled
+                        style={{ width: '100%', opacity: 0.5, cursor: 'not-allowed', background: 'var(--muted)', color: 'var(--muted-fg)' }}
+                        onClick={(e) => { e.stopPropagation(); navigate(`/products/${p.id}`); }}
+                      >
+                        Out of Stock
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>

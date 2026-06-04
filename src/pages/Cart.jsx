@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react';
 import { Link, useNavigate } from 'react-router-dom';
 import { Trash2, ArrowLeft, CreditCard } from 'lucide-react';
-import { collection, addDoc } from 'firebase/firestore';
+import { collection, addDoc, doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import useCartStore from '../store/useCartStore';
 import useAuthStore from '../store/useAuthStore';
@@ -17,7 +17,8 @@ function fmt(n) {
   return '₦' + Math.ceil(n).toLocaleString('en-NG');
 }
 
-const INTEREST_RATES = { 2: 0, 3: 0.1, 4: 0.1, 5: 0.2, 6: 0.2 };
+const INTEREST_RATES = { 2: 0.05, 3: 0.1, 4: 0.1, 5: 0.2, 6: 0.2 };
+const DELIVERY_FEE = 7000;
 
 export default function Cart() {
   const navigate = useNavigate();
@@ -25,7 +26,48 @@ export default function Cart() {
   const { items, _hydrated, removeFromCart, updateQuantity, getInitialPaymentTotal, clearCart } = useCartStore();
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState('');
-  const [deliveryInfo, setDeliveryInfo] = useState({ address: '', city: '', state: '', phone: '', instructions: '' });
+  const [deliveryInfo, setDeliveryInfo] = useState({
+    address: '',
+    city: '',
+    state: '',
+    landmark: '',
+    phone: '',
+    instructions: ''
+  });
+
+  const [profileData, setProfileData] = useState(null);
+  const [savedAddresses, setSavedAddresses] = useState([]);
+  const [selectedAddressIndex, setSelectedAddressIndex] = useState(-1);
+
+  const [saveNewAddress, setSaveNewAddress] = useState(false);
+
+  useEffect(() => {
+    const fetchUserData = async () => {
+      if (!user) return;
+      try {
+        const docRef = doc(db, 'users', user.uid);
+        const docSnap = await getDoc(docRef);
+        if (docSnap.exists()) {
+          const data = docSnap.data();
+          setProfileData(data);
+          
+          if (data.savedAddresses && data.savedAddresses.length > 0) {
+            setSavedAddresses(data.savedAddresses);
+            setSelectedAddressIndex(0);
+            setDeliveryInfo({ ...data.savedAddresses[0], instructions: '' });
+          } else if (data.phone) {
+            setDeliveryInfo(prev => ({ ...prev, phone: data.phone }));
+          }
+        }
+      } catch (err) {
+        console.error("Error fetching user data:", err);
+      }
+    };
+    fetchUserData();
+  }, [user]);
+
+  // Note: Phone verification has been removed in favor of Email verification.
+
   const [showPreview, setShowPreview] = useState(false);
   const [conflictDismissed, setConflictDismissed] = useState(false);
   const [splitMode, setSplitMode] = useState(false);
@@ -45,7 +87,7 @@ export default function Cart() {
   const recalcPeriodPayment = (item, targetFreq, targetDur) => {
     const rate = INTEREST_RATES[targetDur] ?? 0.2;
     const fullAmount = item.price * (1 + rate);
-    return targetFreq === 'weekly' ? fullAmount / (targetDur * 4) : fullAmount / targetDur;
+    return fullAmount / targetDur;
   };
 
   const getPaymentSignature = (item) => item.paymentChoice === 'full' ? 'full' : `${item.paymentFrequency}-${item.installments}`;
@@ -104,11 +146,12 @@ export default function Cart() {
     );
   }
 
-  const totalToPayNow = getInitialPaymentTotal();
+  const totalToPayNow = getInitialPaymentTotal() + DELIVERY_FEE;
 
-  const saveOrder = async (itemsToSave, paymentRef, splitPayment = false) => {
-    const totalAmount = itemsToSave.reduce((acc, i) => acc + (i.paymentChoice === 'full' ? i.price * i.quantity : (i.price * (1 + (INTEREST_RATES[i.installments] ?? 0.2))) * i.quantity), 0);
-    const amountPaid = itemsToSave.reduce((acc, i) => acc + (i.paymentChoice === 'full' ? i.price * i.quantity : (i.periodPayment || i.monthlyPayment || 0) * i.quantity), 0);
+  const saveOrder = async (itemsToSave, paymentRef, appliedDeliveryFee = 0) => {
+    if (!user) throw new Error('User session expired. Please contact support with your payment reference.');
+    const totalAmount = itemsToSave.reduce((acc, i) => acc + (i.paymentChoice === 'full' ? i.price * i.quantity : (i.price * (1 + (INTEREST_RATES[i.installments] ?? 0.2))) * i.quantity), 0) + appliedDeliveryFee;
+    const amountPaid = itemsToSave.reduce((acc, i) => acc + (i.paymentChoice === 'full' ? i.price * i.quantity : (i.periodPayment || i.monthlyPayment || 0) * i.quantity), 0) + appliedDeliveryFee;
     
     for (const item of itemsToSave) {
       try {
@@ -122,6 +165,7 @@ export default function Cart() {
       userId: user.uid,
       items: itemsToSave,
       deliveryInfo,
+      deliveryFee: appliedDeliveryFee,
       totalAmount,
       amountPaid,
       status: 'Processing',
@@ -137,7 +181,95 @@ export default function Cart() {
     }
   };
 
-  const handleKorapayPayment = () => {
+  const handleKorapayPayment = async () => {
+    setLoading(true);
+    setError('');
+    
+    // PRE-CHECKOUT INVENTORY & PRICE VALIDATION
+    let verifiedTotalToPayNow = DELIVERY_FEE;
+    const verifiedItems = [];
+    let verifiedExpandedItems = [];
+    
+    try {
+      const quantityMap = {};
+      for (const item of items) {
+        quantityMap[item.id] = (quantityMap[item.id] || 0) + item.quantity;
+      }
+      
+      const productDataCache = {};
+      
+      for (const [productId, requiredQty] of Object.entries(quantityMap)) {
+        const docRef = doc(db, 'products', productId);
+        const docSnap = await getDoc(docRef);
+        
+        if (!docSnap.exists()) {
+          throw new Error('One or more products in your cart no longer exist.');
+        }
+        
+        const productData = docSnap.data();
+        productDataCache[productId] = productData;
+        
+        if (!productData.unlimited_stock) {
+          const itemsLeft = productData.items_left || 0;
+          if (requiredQty > itemsLeft) {
+            throw new Error(`Insufficient stock for "${productData.name}". Only ${itemsLeft} left.`);
+          }
+        }
+      }
+      
+      // Calculate verified prices and totals
+      for (const item of items) {
+        if (!Number.isInteger(item.quantity) || item.quantity < 1) {
+          throw new Error('Invalid cart item quantity detected. Please clear your cart and try again.');
+        }
+
+        if (item.paymentChoice === 'installment' && ![2, 3, 4, 5, 6].includes(item.installments)) {
+          throw new Error('Invalid installment period detected. Please clear your cart and try again.');
+        }
+
+        const dbProduct = productDataCache[item.id];
+        const truePrice = Number(dbProduct.price);
+        
+        let truePeriodPayment = 0;
+        
+        if (item.paymentChoice === 'full') {
+          verifiedTotalToPayNow += truePrice * item.quantity;
+        } else {
+          const rate = INTEREST_RATES[item.installments] ?? 0.2;
+          const fullAmount = truePrice * (1 + rate);
+          truePeriodPayment = fullAmount / item.installments;
+            
+          verifiedTotalToPayNow += truePeriodPayment * item.quantity;
+        }
+        
+        verifiedItems.push({
+          ...item,
+          price: truePrice,
+          periodPayment: truePeriodPayment
+        });
+      }
+      
+      if (splitMode) {
+        verifiedExpandedItems = expandedItems.map(unit => {
+          const vItem = verifiedItems.find(vi => vi.cartItemId === unit.cartItemId);
+          return vItem ? { ...unit, price: vItem.price, periodPayment: vItem.periodPayment } : unit;
+        });
+      }
+      
+    } catch (err) {
+      setLoading(false);
+      toast.error(err.message);
+      setError(err.message);
+      setShowPreview(false); // Close modal so they can see the error or fix the cart
+      return;
+    }
+    setLoading(false);
+
+    let paymentProcessed = false;
+    const safetyTimer = setTimeout(() => {
+      if (!paymentProcessed) setLoading(false);
+    }, 90000);
+
     const koraKey = import.meta.env.VITE_KORA_PUBLIC_KEY;
     if (!koraKey || !window.Korapay) {
       toast.error('Payment gateway is not configured properly.');
@@ -146,18 +278,22 @@ export default function Cart() {
     window.Korapay.initialize({
       key: koraKey,
       reference: `JD_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
-      amount: totalToPayNow,
+      amount: verifiedTotalToPayNow,
       currency: 'NGN',
       customer: {
         name: user?.displayName || user?.email?.split('@')[0] || 'Customer',
         email: user?.email || ''
       },
       onSuccess: async (response) => {
+        if (paymentProcessed) return;
+        paymentProcessed = true;
+        clearTimeout(safetyTimer);
         setLoading(true);
         try {
           if (splitMode) {
-            const groups = buildGroupMap(expandedItems);
-            for (const [gId, groupUnits] of Object.entries(groups)) {
+            const groups = Object.entries(buildGroupMap(verifiedExpandedItems));
+            let isFirst = true;
+            for (const [gId, groupUnits] of groups) {
               if (groupUnits.length === 0) continue;
               const merged = {};
               groupUnits.forEach(unit => {
@@ -165,10 +301,11 @@ export default function Cart() {
                 merged[unit.cartItemId].quantity += 1;
               });
               const groupItems = Object.values(merged);
-              await saveOrder(groupItems, response.reference || `JD_${Date.now()}_G${gId}`);
+              await saveOrder(groupItems, response.reference || `JD_${Date.now()}_G${gId}`, isFirst ? DELIVERY_FEE : 0);
+              isFirst = false;
             }
           } else {
-            await saveOrder(items, response.reference || `JD_${Date.now()}`);
+            await saveOrder(verifiedItems, response.reference || `JD_${Date.now()}`, DELIVERY_FEE);
           }
           clearCart();
           toast.success('Payment successful! Order placed.');
@@ -182,10 +319,16 @@ export default function Cart() {
         }
       },
       onFailed: (err) => {
+        clearTimeout(safetyTimer);
+        setLoading(false);
         toast.error('Payment failed: ' + (err?.message || 'Please try again'));
         console.error('Korapay payment failed:', err);
       },
-      onClose: () => console.log('Korapay widget closed')
+      onClose: () => {
+        clearTimeout(safetyTimer);
+        setLoading(false);
+        if (!paymentProcessed) console.log('Korapay widget closed');
+      }
     });
   };
 
@@ -243,7 +386,7 @@ export default function Cart() {
                               Your installment payments will be combined into a single schedule and calculated together during order review.
                             </div>
                           ) : (
-                            <div style={{ color: 'var(--muted-fg)', fontSize: '0.85rem', fontWeight: '500' }}>Installment: {item.paymentFrequency === 'weekly' ? item.installments * 4 + ' Weeks' : item.installments + ' Months'}</div>
+                            <div style={{ color: 'var(--muted-fg)', fontSize: '0.85rem', fontWeight: '500' }}>Installment: {item.installments} Weeks</div>
                           )
                         ) : (
                           <div style={{ color: 'var(--muted-fg)', fontSize: '0.85rem', fontWeight: '500' }}>Full Payment</div>
@@ -270,16 +413,45 @@ export default function Cart() {
               <div style={{ background: 'var(--card-bg)', padding: '2rem', borderRadius: '12px', border: '1px solid var(--border)', position: 'sticky', top: '100px' }}>
                 <h2 style={{ fontSize: '1.25rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--border)', paddingBottom: '1rem' }}>Delivery Information</h2>
                 <div style={{ display: 'flex', flexDirection: 'column', gap: '1rem', marginBottom: '2rem' }}>
-                  <input type="text" placeholder="Full Address" value={deliveryInfo.address} onChange={(e) => setDeliveryInfo({ ...deliveryInfo, address: e.target.value })} style={{ padding: '0.75rem', borderRadius: '6px', border: '1px solid var(--border)', outline: 'none' }} />
+                  
+                  {savedAddresses.length > 0 && (
+                    <div style={{ display: 'flex', flexDirection: 'column' }}>
+                      <span style={{ fontSize: '0.75rem', fontWeight: '700', color: 'var(--muted-fg)', textTransform: 'uppercase', marginBottom: '0.5rem' }}>Saved Addresses</span>
+                      <select 
+                        value={selectedAddressIndex}
+                        onChange={(e) => {
+                          const idx = Number(e.target.value);
+                          setSelectedAddressIndex(idx);
+                          if (idx >= 0) {
+                            setDeliveryInfo({ ...savedAddresses[idx], instructions: deliveryInfo.instructions });
+                            setSaveNewAddress(false);
+                          } else {
+                            setDeliveryInfo({ address: '', city: '', state: '', landmark: '', phone: profileData?.phone || '', instructions: deliveryInfo.instructions });
+                          }
+                        }}
+                        style={{ padding: '0.75rem', borderRadius: '6px', border: '1px solid var(--border)', outline: 'none', appearance: 'auto' }}
+                      >
+                        {savedAddresses.map((addr, idx) => (
+                          <option key={idx} value={idx}>{addr.address}, {addr.city}</option>
+                        ))}
+                        <option value={-1}>+ Add New Address</option>
+                      </select>
+                    </div>
+                  )}
+
+                  <input type="text" placeholder="Full Address" value={deliveryInfo.address} onChange={(e) => { setDeliveryInfo({ ...deliveryInfo, address: e.target.value }); setSelectedAddressIndex(-1); }} style={{ padding: '0.75rem', borderRadius: '6px', border: '1px solid var(--border)', outline: 'none' }} />
                   <div style={{ display: 'flex', gap: '1rem', flexWrap: 'wrap' }}>
-                    <div style={{ flex: '1 1 120px', display: 'flex', flexDirection: 'column' }}>
-                      <select value={deliveryInfo.state} onChange={(e) => setDeliveryInfo({ ...deliveryInfo, state: e.target.value, city: '' })} style={{ width: '100%', padding: '0.75rem', borderRadius: '6px', border: '1px solid var(--border)', outline: 'none', appearance: 'auto' }}>
+                    <div style={{ flex: '1 1 100px', display: 'flex', flexDirection: 'column' }}>
+                      <input type="text" value="Nigeria" disabled style={{ width: '100%', padding: '0.75rem', borderRadius: '6px', border: '1px solid var(--border)', outline: 'none', background: 'var(--muted)', color: 'var(--muted-fg)', cursor: 'not-allowed' }} title="Country is fixed to Nigeria" />
+                    </div>
+                    <div style={{ flex: '2 1 120px', display: 'flex', flexDirection: 'column' }}>
+                      <select value={deliveryInfo.state} onChange={(e) => { setDeliveryInfo({ ...deliveryInfo, state: e.target.value, city: '' }); setSelectedAddressIndex(-1); }} style={{ width: '100%', padding: '0.75rem', borderRadius: '6px', border: '1px solid var(--border)', outline: 'none', appearance: 'auto' }}>
                         <option value="">Select State</option>
                         {(nigeriaData || []).map(s => <option key={s.state} value={s.state}>{s.state}</option>)}
                       </select>
                     </div>
                     <div style={{ flex: '1 1 120px', display: 'flex', flexDirection: 'column' }}>
-                      <input type="text" list="lga-list" placeholder="Local Government Area (Select or Type)" value={deliveryInfo.city} onChange={(e) => setDeliveryInfo({ ...deliveryInfo, city: e.target.value })} style={{ width: '100%', padding: '0.75rem', borderRadius: '6px', border: '1px solid var(--border)', outline: 'none' }} />
+                      <input type="text" list="lga-list" placeholder="Local Government Area (Select or Type)" value={deliveryInfo.city} onChange={(e) => { setDeliveryInfo({ ...deliveryInfo, city: e.target.value }); setSelectedAddressIndex(-1); }} style={{ width: '100%', padding: '0.75rem', borderRadius: '6px', border: '1px solid var(--border)', outline: 'none' }} />
                       <datalist id="lga-list">
                         {((nigeriaData || []).find(s => s.state === deliveryInfo.state)?.lgas || []).map(lga => (
                           <option key={lga.name} value={lga.name} />
@@ -288,31 +460,47 @@ export default function Cart() {
                     </div>
                   </div>
                   <div>
-                    <input type="tel" placeholder="WhatsApp Number (e.g. +234...)" value={deliveryInfo.phone} onChange={(e) => setDeliveryInfo({ ...deliveryInfo, phone: e.target.value })} style={{ width: '100%', padding: '0.75rem', borderRadius: '6px', border: '1px solid var(--border)', outline: 'none' }} />
-                    <span style={{ fontSize: '0.75rem', color: 'var(--muted-fg)', marginTop: '0.25rem', display: 'block' }}>Required for WhatsApp delivery updates. Please include country code (+234).</span>
+                    <input type="tel" placeholder="WhatsApp Number (e.g. +234...)" value={deliveryInfo.phone} onChange={(e) => { setDeliveryInfo({ ...deliveryInfo, phone: e.target.value }); setSelectedAddressIndex(-1); }} style={{ width: '100%', padding: '0.75rem', borderRadius: '6px', border: '1px solid var(--border)', outline: 'none' }} />
+                    <span style={{ fontSize: '0.75rem', color: 'var(--muted-fg)', marginTop: '0.25rem', display: 'block' }}>Please include country code (+234).</span>
                   </div>
                   <textarea placeholder="Additional Instructions (Optional)" value={deliveryInfo.instructions} onChange={(e) => setDeliveryInfo({ ...deliveryInfo, instructions: e.target.value })} style={{ padding: '0.75rem', borderRadius: '6px', border: '1px solid var(--border)', outline: 'none', resize: 'vertical', minHeight: '80px' }}></textarea>
                 </div>
+
+                {selectedAddressIndex === -1 && savedAddresses.length < 3 && (
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', marginBottom: '2rem' }}>
+                    <input type="checkbox" id="saveAddress" checked={saveNewAddress} onChange={(e) => setSaveNewAddress(e.target.checked)} style={{ width: '1rem', height: '1rem' }} />
+                    <label htmlFor="saveAddress" style={{ fontSize: '0.85rem', fontWeight: '600', color: 'var(--muted-fg)', textTransform: 'uppercase' }}>Save this address for next time</label>
+                  </div>
+                )}
                 <h2 style={{ fontSize: '1.25rem', marginBottom: '1.5rem', borderBottom: '1px solid var(--border)', paddingBottom: '1rem' }}>Order Summary</h2>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem', color: 'var(--muted-fg)' }}>
                   <span>Subtotal ({items.reduce((a, b) => a + b.quantity, 0)} items)</span>
-                  <span>{fmt(totalToPayNow)}</span>
+                  <span>{fmt(getInitialPaymentTotal())}</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '1rem', color: 'var(--muted-fg)' }}>
-                  <span>Shipping</span>
-                  <span>Calculated at checkout</span>
+                  <span>Delivery Fee</span>
+                  <span>{fmt(DELIVERY_FEE)}</span>
                 </div>
                 <div style={{ display: 'flex', justifyContent: 'space-between', margin: '1.5rem 0', paddingTop: '1.5rem', borderTop: '1px dashed var(--border)', fontSize: '1.25rem', fontWeight: '700' }}>
                   <span>Total Due Today</span>
-                  <span>{fmt(totalToPayNow)}</span>
+                  <span style={{ color: 'var(--primary)' }}>{fmt(totalToPayNow)}</span>
                 </div>
+                {items.some(i => i.paymentChoice === 'installment') && (
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginTop: '1rem', paddingTop: '1rem', borderTop: '1px solid var(--border)' }}>
+                    <span style={{ fontSize: '0.75rem', fontWeight: '700', color: 'var(--muted-fg)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>Combined Installment</span>
+                    <span style={{ fontSize: '1rem', fontWeight: '700', color: 'var(--primary)' }}>
+                      {fmt(items.reduce((acc, i) => acc + (i.paymentChoice === 'installment' ? (i.periodPayment || i.monthlyPayment) * i.quantity : 0), 0))} 
+                      <span style={{ fontSize: '0.75rem', color: 'var(--muted-fg)', fontWeight: 'normal' }}> / {items.some(i => i.paymentFrequency === 'weekly') ? 'wk' : 'mo'}</span>
+                    </span>
+                  </div>
+                )}
                 {!user && (
                   <div style={{ background: '#fef3c7', color: '#92400e', padding: '1rem', borderRadius: '8px', marginBottom: '1.5rem', fontSize: '0.9rem' }}>
                     You must be logged in to checkout.
                   </div>
                 )}
                 <button
-                  onClick={() => {
+                  onClick={async () => {
                     if (!user) { navigate('/login'); return; }
                     if (items.length === 0) return;
                     if (!deliveryInfo.address || !deliveryInfo.city || !deliveryInfo.state || !deliveryInfo.phone) {
@@ -320,7 +508,49 @@ export default function Cart() {
                       setError('Please fill out all required delivery fields.');
                       return;
                     }
+
+                    // Validate delivery phone format (Nigerian E.164: +234XXXXXXXXXX)
+                    const phoneRegex = /^\+234[0-9]{10}$/;
+                    if (!phoneRegex.test(deliveryInfo.phone.replace(/\s/g, ''))) {
+                      toast.error('Please enter a valid Nigerian phone number (e.g. +2348012345678).');
+                      setError('Please enter a valid Nigerian phone number (e.g. +2348012345678).');
+                      return;
+                    }
+
+                    // Check email verification status before allowing checkout
+                    try {
+                      const userDocSnap = await getDoc(doc(db, 'users', user.uid));
+                      if (userDocSnap.exists() && userDocSnap.data().isEmailVerified === false) {
+                        toast.error('Please verify your email address before placing an order.');
+                        setError('Your email address is not verified. Please check your inbox and verify your email first.');
+                        return;
+                      }
+                    } catch (verifyErr) {
+                      console.error('Error checking verification status:', verifyErr);
+                    }
+
                     setError('');
+
+                    if (saveNewAddress) {
+                      try {
+                        const newAddr = {
+                          address: deliveryInfo.address,
+                          city: deliveryInfo.city,
+                          state: deliveryInfo.state,
+                          landmark: deliveryInfo.landmark || '',
+                          phone: deliveryInfo.phone
+                        };
+                        const updatedAddresses = [...savedAddresses, newAddr].slice(0, 3);
+                        await updateDoc(doc(db, 'users', user.uid), {
+                          savedAddresses: updatedAddresses
+                        });
+                        setSavedAddresses(updatedAddresses);
+                        setSaveNewAddress(false);
+                      } catch (err) {
+                        console.error("Error saving address:", err);
+                      }
+                    }
+
                     setShowPreview(true);
                   }}
                   disabled={loading}
@@ -351,15 +581,148 @@ export default function Cart() {
                 <div style={{ marginBottom: '1.5rem', padding: '1rem', background: '#fef3c7', borderRadius: '8px', border: '1px solid #fde68a' }}>
                   <span style={{ color: '#92400e', fontWeight: '600', fontSize: '0.85rem' }}>⚠️ This will charge your card ₦{fmt(totalToPayNow)}</span>
                 </div>
-                {items.map(item => (
-                  <div key={item.cartItemId} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem', fontSize: '0.95rem', alignItems: 'center' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-                      <span style={{ fontWeight: '600' }}>{item.quantity}×</span>
-                      <span>{item.name} <span style={{ fontSize: '0.8rem', color: 'var(--muted-fg)' }}>({item.paymentChoice === 'full' ? 'Full' : `${item.installments} ${item.paymentFrequency === 'weekly' ? 'Wks' : 'Mos'}`})</span></span>
-                    </div>
-                    <span style={{ fontWeight: '600' }}>{fmt((item.paymentChoice === 'full' ? item.price : item.periodPayment || item.monthlyPayment) * item.quantity)}</span>
+                <div style={{ marginBottom: '1rem' }}>
+                  {(() => {
+                    const installmentSigs = items
+                      .filter(i => i.paymentChoice !== 'full')
+                      .map(i => `${i.paymentFrequency}-${i.installments}`);
+                    const hasSingleOrderConflict = new Set(installmentSigs).size > 1;
+
+                    return (
+                      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', borderBottom: '1px solid var(--border)', paddingBottom: '0.75rem' }}>
+                        <h3 style={{ fontSize: '0.75rem', fontWeight: '700', color: 'var(--muted-fg)', textTransform: 'uppercase', letterSpacing: '0.05em', margin: 0 }}>
+                          📦 Order Items
+                        </h3>
+                        <button
+                          onClick={() => { splitMode ? exitSplitMode() : enterSplitMode(); }}
+                          style={{ padding: '0.4rem 0.75rem', fontSize: '0.75rem', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.05em', borderRadius: '4px', cursor: 'pointer', border: 'none', background: splitMode ? '#e5e7eb' : hasSingleOrderConflict ? '#fee2e2' : '#dbeafe', color: splitMode ? '#4b5563' : hasSingleOrderConflict ? '#b91c1c' : '#1d4ed8', transition: 'background 0.2s' }}
+                        >
+                          {splitMode ? '← Merge into Single Order' : hasSingleOrderConflict ? '⚠️ Resolve Conflicting Orders' : 'Split into Multiple Orders'}
+                        </button>
+                      </div>
+                    );
+                  })()}
+
+                  {splitMode ? (() => {
+                    const groupMap = buildGroupMap(expandedItems);
+                    const conflicts = getGroupConflicts(groupMap);
+                    const hasAnyConflict = Object.keys(conflicts).length > 0;
+
+                    return (
+                      <>
+                        {Object.entries(groupMap).sort(([a],[b]) => Number(a)-Number(b)).map(([gId, groupUnits]) => {
+                          const conflict = conflicts[gId];
+                          const hasConflict = !!conflicts[gId];
+                          return (
+                            <div key={gId} style={{ marginBottom: '1.5rem', border: `1px solid ${hasConflict ? '#fca5a5' : 'var(--border)'}`, borderRadius: '6px', overflow: 'hidden' }}>
+                              <div style={{ padding: '0.75rem 1rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center', borderBottom: `1px solid ${hasConflict ? '#fecaca' : 'var(--border)'}`, background: hasConflict ? '#fef2f2' : 'var(--card-bg)' }}>
+                                <strong style={{ fontSize: '0.85rem', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.05em', color: hasConflict ? '#b91c1c' : 'var(--foreground)' }}>Order {gId}</strong>
+                                {groupUnits.some(u => u.paymentChoice !== 'full') && (
+                                  <button
+                                    onClick={() => {
+                                      const firstSig = groupUnits.find(u => u.paymentChoice !== 'full');
+                                      if (!firstSig) return;
+                                      const targetFreq = firstSig.paymentFrequency;
+                                      const targetDur = firstSig.installments;
+                                      setExpandedItems(prev => prev.map(unit => {
+                                        if ((itemGroups[unit.splitId] || 1) === Number(gId) && unit.paymentChoice !== 'full') {
+                                          const newPeriodPayment = recalcPeriodPayment(unit, targetFreq, targetDur);
+                                          return { ...unit, paymentFrequency: targetFreq, installments: targetDur, periodPayment: newPeriodPayment };
+                                        }
+                                        return unit;
+                                      }));
+                                    }}
+                                    style={{ padding: '0.4rem 0.75rem', fontSize: '0.75rem', fontWeight: '700', textTransform: 'uppercase', letterSpacing: '0.05em', borderRadius: '4px', cursor: 'pointer', border: 'none', background: hasConflict ? '#dc2626' : '#e5e7eb', color: hasConflict ? 'white' : '#374151' }}
+                                  >
+                                    {hasConflict ? '⚠️ Unify Plans' : 'Unify Plans'}
+                                  </button>
+                                )}
+                              </div>
+                              <div style={{ padding: '1rem', background: 'var(--card-bg)', display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                              {groupUnits.map(unit => (
+                                <div key={unit.splitId} style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '0.75rem', padding: '0.75rem', background: 'var(--muted)', border: '1px solid var(--border)', borderRadius: '4px', flexWrap: 'wrap' }}>
+                                  
+                                  <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem', minWidth: 0, flex: 1 }}>
+                                    <span style={{ fontSize: '0.8rem', fontWeight: '700', color: 'var(--muted-fg)' }}>1×</span>
+                                    <span style={{ fontWeight: '700', fontSize: '0.85rem', color: 'var(--foreground)', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{unit.name}</span>
+                                    <span style={{ fontSize: '0.7rem', fontWeight: '700', color: 'var(--muted-fg)', textTransform: 'uppercase', letterSpacing: '0.05em' }}>({unit.paymentChoice === 'full' ? 'Full' : `${unit.installments} Wks`})</span>
+                                  </div>
+                                  
+                                  <div style={{ display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem', flexShrink: 0 }}>
+                                    <span style={{ fontWeight: '700', fontSize: '0.95rem', color: 'var(--foreground)', width: '90px', textAlign: 'right', paddingRight: '0.5rem', borderRight: '1px solid var(--border)' }}>{fmt(unit.paymentChoice === 'full' ? unit.price : unit.periodPayment || 0)}</span>
+                                    
+                                    <select
+                                      value={itemGroups[unit.splitId] || 1}
+                                      onChange={(e) => setItemGroups(prev => ({ ...prev, [unit.splitId]: Number(e.target.value) }))}
+                                      style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', fontSize: '0.75rem', fontWeight: '700', color: 'var(--foreground)', borderRadius: '4px', padding: '0.25rem 0.5rem', outline: 'none' }}
+                                    >
+                                      {[1,2,3,4,5].map(n => <option key={n} value={n}>Order {n}</option>)}
+                                    </select>
+
+                                    {unit.paymentChoice !== 'full' && (
+                                      <>
+                                        <select
+                                          value={unit.paymentFrequency}
+                                          onChange={(e) => {
+                                            const newFreq = e.target.value;
+                                            const newPP = recalcPeriodPayment(unit, newFreq, unit.installments);
+                                            setExpandedItems(prev => prev.map(u => u.splitId === unit.splitId ? { ...u, paymentFrequency: newFreq, periodPayment: newPP } : u));
+                                          }}
+                                          style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: '700', color: 'var(--foreground)', borderRadius: '4px', padding: '0.25rem 0.5rem', outline: 'none' }}
+                                        >
+                                          <option value="weekly">Weekly</option>
+                                        </select>
+                                        <select
+                                          value={unit.installments}
+                                          onChange={(e) => {
+                                            const newDur = Number(e.target.value);
+                                            const newPP = recalcPeriodPayment(unit, unit.paymentFrequency, newDur);
+                                            setExpandedItems(prev => prev.map(u => u.splitId === unit.splitId ? { ...u, installments: newDur, periodPayment: newPP } : u));
+                                          }}
+                                          style={{ background: 'var(--card-bg)', border: '1px solid var(--border)', fontSize: '0.7rem', textTransform: 'uppercase', letterSpacing: '0.05em', fontWeight: '700', color: 'var(--foreground)', borderRadius: '4px', padding: '0.25rem 0.5rem', outline: 'none' }}
+                                        >
+                                          {[2,3,4,5,6].map(n => (
+                                            <option key={n} value={n}>{n} Wks</option>
+                                          ))}
+                                        </select>
+                                      </>
+                                    )}
+                                  </div>
+                                </div>
+                              ))}
+                              </div>
+                            </div>
+                          );
+                        })}
+
+                        {hasAnyConflict && (
+                          <div style={{ background: '#fef3c7', border: '1px solid #fde68a', color: '#92400e', fontSize: '0.85rem', fontWeight: '700', padding: '1rem', borderRadius: '6px', marginBottom: '1.5rem', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            ⚠️ Resolve all conflicts above before proceeding.
+                          </div>
+                        )}
+                        <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', padding: '1rem', borderRadius: '6px', fontSize: '0.85rem', fontWeight: '700', color: '#1e40af', textTransform: 'uppercase', letterSpacing: '0.05em', textAlign: 'center', marginBottom: '1.5rem' }}>
+                          {Object.keys(groupMap).length} separate order{Object.keys(groupMap).length > 1 ? 's' : ''} will be created.
+                        </div>
+                      </>
+                    );
+                  })() : (
+                    <>
+                      {items.map(item => (
+                        <div key={item.cartItemId} style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem', fontSize: '0.95rem', alignItems: 'center' }}>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+                            <span style={{ fontWeight: '600' }}>{item.quantity}×</span>
+                            <span>{item.name} <span style={{ fontSize: '0.8rem', color: 'var(--muted-fg)' }}>({item.paymentChoice === 'full' ? 'Full' : `${item.installments} Wks`})</span></span>
+                          </div>
+                          <span style={{ fontWeight: '600' }}>{fmt((item.paymentChoice === 'full' ? item.price : item.periodPayment || item.monthlyPayment) * item.quantity)}</span>
+                        </div>
+                      ))}
+                    </>
+                  )}
+                </div>
+                  <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.75rem', fontSize: '0.95rem', alignItems: 'center' }}>
+                    <span>Delivery Fee</span>
+                    <span style={{ fontWeight: '600' }}>{fmt(DELIVERY_FEE)}</span>
                   </div>
-                ))}
                 <div style={{ marginBottom: '2rem', borderTop: '1px solid var(--border)', paddingTop: '1rem', background: 'var(--muted)', padding: '1rem', borderRadius: '8px', marginTop: '1rem' }}>
                   <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '1.15rem', fontWeight: '700', marginBottom: '0.5rem' }}>
                     <span>Total Due Today</span>
@@ -371,10 +734,10 @@ export default function Cart() {
                     style={{ flex: 1, padding: '0.85rem', background: 'transparent', border: '1px solid var(--border)', borderRadius: '8px', fontWeight: '600', cursor: 'pointer', color: 'var(--foreground)' }}>
                     Cancel
                   </button>
-                  <button onClick={handleKorapayPayment} disabled={loading}
-                    style={{ flex: 1, padding: '0.85rem', background: 'var(--primary)', color: 'white', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.7 : 1, display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem' }}>
+                  <button onClick={handleKorapayPayment} disabled={loading || (splitMode && Object.keys(getGroupConflicts(buildGroupMap(expandedItems))).length > 0)}
+                    style={{ flex: 1, padding: '0.85rem', background: 'var(--primary)', color: 'white', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: (loading || (splitMode && Object.keys(getGroupConflicts(buildGroupMap(expandedItems))).length > 0)) ? 'not-allowed' : 'pointer', opacity: (loading || (splitMode && Object.keys(getGroupConflicts(buildGroupMap(expandedItems))).length > 0)) ? 0.7 : 1, display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem' }}>
                     <CreditCard size={18} />
-                    {loading ? 'Processing...' : 'Proceed to Pay'}
+                    {loading ? 'Processing...' : (splitMode && Object.keys(getGroupConflicts(buildGroupMap(expandedItems))).length > 0) ? 'Resolve Conflicts' : splitMode ? `Place ${Object.keys(buildGroupMap(expandedItems)).length} Orders` : 'Proceed to Pay'}
                   </button>
                 </div>
               </div>
@@ -407,6 +770,9 @@ export default function Cart() {
           }
           return null;
         })()}
+
+        {/* Phone OTP Verification Modal */}
+
       </main>
 
       <ConfirmModal

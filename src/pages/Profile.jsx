@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
-import { doc, collection, query, where, updateDoc, onSnapshot } from 'firebase/firestore';
+import { doc, collection, query, where, updateDoc, onSnapshot, runTransaction } from 'firebase/firestore';
 import { auth, db } from '../firebase';
 import useAuthStore from '../store/useAuthStore';
 import Footer from '../components/Footer';
@@ -21,7 +21,7 @@ function PaymentBadge({ paymentChoice, installments, paymentFrequency }) {
       background: isInstallment ? 'hsl(210 100% 93%)' : 'hsl(340 100% 93%)',
       color: isInstallment ? '#1d4ed8' : 'var(--primary)',
     }}>
-      {isInstallment ? `${paymentFrequency === 'weekly' ? installments * 4 + ' Weekly Payments' : installments + ' Monthly Payments'}` : 'Full Payment'}
+      {isInstallment ? `${paymentFrequency === 'weekly' ? installments + ' Weekly Payments' : installments + ' Monthly Payments'}` : 'Full Payment'}
     </span>
   );
 }
@@ -90,39 +90,109 @@ export default function Profile() {
 
   const handleContinuePayment = async (order, amountToPay) => {
     if (!user) return;
+
+    // Validate the payment amount server-side before opening the widget
+    const numericAmount = Number(amountToPay);
+    const remainingBalance = order.totalAmount - order.amountPaid;
+    if (!numericAmount || numericAmount <= 0) {
+      toast.error('Payment amount must be greater than zero.');
+      return;
+    }
+    
+    let finalAmount = Math.ceil(numericAmount);
+    const MINIMUM_PAYMENT = 1000;
+    
+    if (finalAmount < MINIMUM_PAYMENT && finalAmount > 0) {
+      finalAmount = MINIMUM_PAYMENT;
+    }
+    
+    if (finalAmount > remainingBalance + 0.01 && remainingBalance >= MINIMUM_PAYMENT) { 
+      // Only enforce strict ceiling if balance isn't forcing a minimum payment override
+      toast.error('Payment amount cannot exceed the remaining balance.');
+      return;
+    }
+    
+    const koraKey = import.meta.env.VITE_KORA_PUBLIC_KEY;
+    if (!koraKey || !window.Korapay) {
+      toast.error('Payment gateway is not configured properly.');
+      return;
+    }
+
     setLoading(true);
 
-    try {
-      const orderRef = doc(db, 'orders', order.id);
-      await updateDoc(orderRef, {
-        amountPaid: order.amountPaid + amountToPay,
-        status: (order.amountPaid + amountToPay >= order.totalAmount) ? 'Completed' : 'Processing (Installments)'
-      });
-      
-      setOrders(orders.map(o => {
-        if (o.id === order.id) {
-          return {
-            ...o,
-            amountPaid: o.amountPaid + amountToPay,
-            status: (o.amountPaid + amountToPay >= o.totalAmount) ? 'Completed' : 'Processing (Installments)'
-          };
+    let paymentProcessed = false;
+    const safetyTimer = setTimeout(() => {
+      if (!paymentProcessed) setLoading(false);
+    }, 90000);
+
+    window.Korapay.initialize({
+      key: koraKey,
+      reference: `JD_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+      amount: finalAmount,
+      currency: 'NGN',
+      customer: {
+        name: profileData?.firstName || user?.displayName || user?.email?.split('@')[0] || 'Customer',
+        email: profileData?.email || user?.email || ''
+      },
+      onSuccess: async (response) => {
+        if (paymentProcessed) return;
+        paymentProcessed = true;
+        clearTimeout(safetyTimer);
+        try {
+          const orderRef = doc(db, 'orders', order.id);
+          
+          await runTransaction(db, async (transaction) => {
+            const orderSnap = await transaction.get(orderRef);
+            if (!orderSnap.exists()) {
+              throw new Error("Order does not exist!");
+            }
+            const orderData = orderSnap.data();
+            const newAmountPaid = (orderData.amountPaid || 0) + finalAmount;
+            const newStatus = newAmountPaid >= orderData.totalAmount ? 'Completed' : 'Processing (Installments)';
+            
+            transaction.update(orderRef, {
+              amountPaid: newAmountPaid,
+              status: newStatus
+            });
+          });
+          
+          setOrders(orders.map(o => {
+            if (o.id === order.id) {
+              return {
+                ...o,
+                amountPaid: o.amountPaid + finalAmount,
+                status: (o.amountPaid + finalAmount >= o.totalAmount) ? 'Completed' : 'Processing (Installments)'
+              };
+            }
+            return o;
+          }));
+          
+          toast.success('Payment successful!');
+          
+          setCustomAmounts(prev => {
+            const next = { ...prev };
+            delete next[order.id];
+            return next;
+          });
+        } catch (err) {
+          console.error("Error updating order:", err);
+          toast.error("Payment successful but failed to update order record. Please contact support.");
+        } finally {
+          setLoading(false);
         }
-        return o;
-      }));
-      
-      toast.success('Payment recorded successfully!');
-      
-      setCustomAmounts(prev => {
-        const next = { ...prev };
-        delete next[order.id];
-        return next;
-      });
-    } catch (err) {
-      console.error("Error updating order:", err);
-      toast.error("Payment successful but failed to update order record.");
-    } finally {
-      setLoading(false);
-    }
+      },
+      onFailed: (err) => {
+        clearTimeout(safetyTimer);
+        setLoading(false);
+        toast.error('Payment failed: ' + (err?.message || 'Please try again'));
+        console.error('Korapay payment failed:', err);
+      },
+      onClose: () => {
+        clearTimeout(safetyTimer);
+        setLoading(false);
+        if (!paymentProcessed) console.log('Korapay widget closed');
+      }
+    });
   };
 
   if (authLoading || loading) {
@@ -316,7 +386,7 @@ export default function Profile() {
                   
                   const combinedPeriodPayment = order.items?.reduce((acc, i) => acc + (i.paymentChoice === 'installment' ? (i.periodPayment || i.monthlyPayment) * i.quantity : 0), 0) || 0;
                   const isWeekly = order.items?.some(i => i.paymentFrequency === 'weekly');
-                  const maxPeriods = Math.max(...(order.items?.map(i => i.paymentChoice === 'installment' ? (isWeekly ? i.installments * 4 : i.installments) : 0) || [0]));
+                      const maxPeriods = Math.max(...(order.items?.map(i => i.paymentChoice === 'installment' ? i.installments : 0) || [0]));
                   
                   // Calculate how much of the paid amount was for installments vs full payments
                   const totalFullPayments = order.items?.reduce((acc, i) => acc + (i.paymentChoice === 'full' ? i.price * i.quantity : 0), 0) || 0;

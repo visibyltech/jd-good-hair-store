@@ -255,10 +255,9 @@ export const createPaymentSuccessNotification = async (userId, orderId, amount) 
 export const createOrderOTPNotification = async (userId, orderId, otpCode) => {
   return createNotification(userId, NOTIFICATION_TYPES.ORDER_OTP, {
     title: 'Your Package is Out for Delivery! 🚚',
-    message: `Your order is on its way. Share this OTP with your dispatch rider: ${otpCode}`,
+    message: `Your order is on its way! Check your email for the 6-digit code to give your dispatch rider on arrival.`,
     metadata: {
       order_id: orderId,
-      otp_code: otpCode,
       timestamp: new Date().toISOString()
     }
   });

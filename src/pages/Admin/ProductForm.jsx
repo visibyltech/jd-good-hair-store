@@ -131,13 +131,18 @@ export default function ProductForm() {
     setError('');
 
     try {
+      const parsedPrice = Number(formData.price);
+      if (isNaN(parsedPrice) || parsedPrice <= 0) {
+        throw new Error('Product price must be greater than 0.');
+      }
+
       let imageUrl = formData.img;
       if (imageFile) imageUrl = await uploadImage(imageFile);
       if (!imageUrl) throw new Error('Product image is required');
 
       const payload = {
         ...formData,
-        price: Number(formData.price),
+        price: parsedPrice,
         pss: Number(formData.pss || 0),
         brand: formData.brand || '',
         description: formData.description || '',
@@ -373,7 +378,7 @@ export default function ProductForm() {
                   <span style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontWeight: 700, fontSize: 14 }}>₦</span>
                   <input
                     type="number" name="price" value={formData.price}
-                    onChange={handleChange} required placeholder="150000"
+                    onChange={handleChange} required placeholder="150000" min="1"
                     style={{ ...inputStyle, paddingLeft: 34 }}
                     onFocus={e => { e.target.style.borderColor = 'var(--primary)'; e.target.style.boxShadow = '0 0 0 3px rgba(225,29,72,0.12)'; }}
                     onBlur={e => { e.target.style.borderColor = '#e5e7eb'; e.target.style.boxShadow = 'none'; }}

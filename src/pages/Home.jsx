@@ -60,15 +60,15 @@ export default function Home() {
       <section className="container" style={{ padding: '4rem 1rem 2rem' }}>
         <p className="section-eyebrow" style={{ textAlign: 'center', marginBottom: '0.5rem' }}>Browse</p>
         <h2 style={{ fontFamily: 'var(--font-display)', textAlign: 'center', marginBottom: '2rem', fontSize: '2rem' }}>Shop by Category</h2>
-        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', justifyContent: 'center' }}>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.75rem', justifyContent: 'center', padding: '0 0.5rem' }}>
           {['Bundles', 'Wigs', 'Closures', 'Frontals'].map(cat => (
-            <a
+            <Link
               key={cat}
-              href={`/products?cat=${cat}`}
+              to={`/products?cat=${cat}`}
               className="cat-pill"
             >
               {cat}
-            </a>
+            </Link>
           ))}
         </div>
       </section>
@@ -99,18 +99,17 @@ export default function Home() {
               <motion.div
                 key={p.id}
                 className="feat-product-card"
-                initial={{ opacity: 0, y: 20 }}
+                initial={{ opacity: 0, y: 24 }}
                 whileInView={{ opacity: 1, y: 0 }}
-                viewport={{ once: true, margin: "-40px" }}
-                transition={{ delay: i * 0.08, duration: 0.45 }}
+                viewport={{ once: true, margin: '-40px' }}
+                transition={{ delay: i * 0.1, duration: 0.5, ease: [0.22, 1, 0.36, 1] }}
               >
                 <Link to={`/products/${p.id}`} className="feat-product-img-wrap">
                   <img src={p.img} alt={p.name} loading="lazy" decoding="async" />
-                  {p.featured && <span className="feat-badge">Featured</span>}
-                  {/* Hover overlay */}
+                  {p.featured && <span className="feat-badge">⭐ Featured</span>}
                   <div className="feat-product-overlay">
                     <span className="feat-overlay-btn">
-                      <Eye size={16} /> Quick View
+                      <Eye size={15} /> Quick View
                     </span>
                   </div>
                 </Link>
@@ -120,10 +119,15 @@ export default function Home() {
                     <h3 className="feat-product-name">{p.name}</h3>
                   </Link>
                   {p.length && <p className="feat-product-length">{p.length}</p>}
+
+
                   <div className="feat-product-footer">
-                    <span className="feat-product-price">₦{Number(p.price).toLocaleString()}</span>
+                    <div>
+                      <span className="feat-product-price">₦{Number(p.price).toLocaleString()}</span>
+                      <span style={{ fontSize: '0.7rem', color: 'var(--muted-fg)', display: 'block', marginTop: '1px' }}>or pay in installments</span>
+                    </div>
                     <Link to={`/products/${p.id}`} className="feat-product-btn">
-                      View
+                      Shop →
                     </Link>
                   </div>
                 </div>
@@ -138,13 +142,14 @@ export default function Home() {
         )}
       </section>
 
+
       {/* FLEXIBLE PAYMENTS SECTION */}
       <section style={{ margin: '2rem 0', padding: '5rem 1rem', background: 'linear-gradient(135deg, hsl(340 100% 97%) 0%, hsl(260 100% 97%) 100%)', textAlign: 'center' }}>
         <div className="container" style={{ maxWidth: '600px' }}>
           <span style={{ fontSize: '0.75rem', letterSpacing: '3px', fontWeight: '700', color: 'var(--primary)', textTransform: 'uppercase', marginBottom: '1rem', display: 'block' }}>Flexible Payments</span>
           <h2 style={{ fontSize: 'clamp(2rem, 6vw, 3rem)', fontFamily: 'var(--font-display)', marginBottom: '1.25rem', lineHeight: 1.2 }}>Pay in Installments</h2>
           <p style={{ color: 'var(--muted-fg)', fontSize: '1.05rem', marginBottom: '2.5rem', lineHeight: 1.7 }}>
-            Get the hair you love now and pay over time. Choose from 2 to 6 month flexible payment plans with 0% interest on 2-month plans.
+            Get the hair you love now and pay over time. Choose from 2 to 6 weeks flexible payment plans starting at just 5% interest.
           </p>
           <a href="/products" className="buy-once-btn" style={{ display: 'inline-flex', fontSize: '1rem', padding: '0.85rem 2.5rem', height: 'auto', borderRadius: '999px', textDecoration: 'none' }}>
             Start Shopping

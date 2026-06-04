@@ -1,4 +1,4 @@
-import { doc, updateDoc, getDoc, Timestamp } from 'firebase/firestore';
+import { doc, updateDoc, getDoc, Timestamp, runTransaction } from 'firebase/firestore';
 import { db } from '../firebase';
 
 /**
@@ -64,23 +64,41 @@ export const updateInventoryStatus = async (productId, itemsLeft) => {
 export const decreaseInventory = async (productId, quantity = 1) => {
   try {
     const productRef = doc(db, 'products', productId);
-    const productSnap = await getDoc(productRef);
+    
+    return await runTransaction(db, async (transaction) => {
+      const productSnap = await transaction.get(productRef);
 
-    if (!productSnap.exists()) {
-      throw new Error('Product not found');
-    }
+      if (!productSnap.exists()) {
+        throw new Error('Product not found');
+      }
 
-    const product = productSnap.data();
-    // Skip inventory decrease for unlimited stock products
-    if (product.unlimited_stock) {
-      return product.items_left || 0;
-    }
+      const product = productSnap.data();
+      
+      // Skip inventory decrease for unlimited stock products
+      if (product.unlimited_stock) {
+        return product.items_left || 0;
+      }
 
-    const currentItems = product.items_left || 0;
-    const newItems = Math.max(0, currentItems - quantity);
+      const currentItems = product.items_left || 0;
+      if (quantity > currentItems) {
+        throw new Error(`Insufficient stock for ${product.name || 'this item'}. Only ${currentItems} left.`);
+      }
+      
+      const newItems = currentItems - quantity;
+      
+      let inventoryStatus = INVENTORY_STATUS.IN_STOCK;
+      if (newItems <= 0) {
+        inventoryStatus = INVENTORY_STATUS.OUT_OF_STOCK;
+      }
 
-    await updateInventoryStatus(productId, newItems);
-    return newItems;
+      transaction.update(productRef, {
+        items_left: newItems,
+        inventory_status: inventoryStatus,
+        updated_at: Timestamp.now()
+      });
+      
+      return newItems;
+    });
   } catch (error) {
     console.error('Error decreasing inventory:', error);
     throw error;

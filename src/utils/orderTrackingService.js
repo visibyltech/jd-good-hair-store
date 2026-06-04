@@ -107,10 +107,9 @@ export const shipOrder = async (orderId, deliveryEmail) => {
       `Order shipped. Delivery OTP sent to ${deliveryEmail}`
     );
 
-    // Update order with OTP (in production, hash the OTP)
+    // Update order with delivery token (OTP is stored hashed in otp_codes collection — never store plaintext here)
     const orderRef = doc(db, 'orders', orderId);
     await updateDoc(orderRef, {
-      delivery_otp: otp, // In production, store hashed OTP only
       delivery_token: generateDeliveryToken(orderId),
       updated_at: Timestamp.now()
     });

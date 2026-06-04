@@ -12,10 +12,12 @@ export const USER_ROLES = {
 /**
  * Check if user has admin role
  * @param {Object} user - User object from auth store
+ * @param {Object} userData - User data from Firestore
  * @returns {boolean}
  */
-export const isAdmin = (user) => {
-  return user?.email === 'zealmart.ng@gmail.com';
+export const isAdmin = (user, userData = null) => {
+  if (userData?.role === USER_ROLES.ADMIN) return true;
+  return user?.email === 'zealmart.ng@gmail.com' || user?.email === 'zenobianewworld@gmail.com';
 };
 
 /**
