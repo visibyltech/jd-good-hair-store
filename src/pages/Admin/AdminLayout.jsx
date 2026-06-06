@@ -122,7 +122,13 @@ export default function AdminLayout() {
       </aside>
 
       {/* Main Content */}
-      <main style={{ flex: 1, padding: '1rem', overflowX: 'hidden' }}>
+      <main style={{ 
+        flex: 1,
+        minWidth: 0,
+        padding: '1rem',
+        overflowX: 'hidden',
+        boxSizing: 'border-box',
+      }}>
         <Outlet />
       </main>
     </div>

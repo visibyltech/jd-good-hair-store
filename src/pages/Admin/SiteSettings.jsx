@@ -6,7 +6,7 @@ import { Save, Plus, Trash2, Settings as SettingsIcon, LayoutTemplate, MessageSq
 import { uploadImage } from '../../utils/uploadImage';
 
 const s = {
-  page: { maxWidth: '1100px', margin: '0 auto', padding: '1.5rem 1rem 4rem' },
+  page: { width: '100%', maxWidth: '1100px', margin: '0 auto', padding: '1.5rem 1rem 4rem', boxSizing: 'border-box', overflowX: 'hidden' },
   header: { display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '2rem' },
   title: { fontFamily: 'var(--font-display)', fontSize: '1.6rem', color: 'var(--foreground)', margin: 0, display: 'flex', alignItems: 'center', gap: '0.6rem' },
   subtitle: { fontSize: '0.82rem', color: 'var(--muted-fg)', marginTop: '0.25rem' },

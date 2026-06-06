@@ -211,7 +211,7 @@ export default function AdminOrders() {
   );
 
   return (
-    <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '1.5rem 1rem 4rem' }}>
+    <div style={{ width: '100%', maxWidth: '1200px', margin: '0 auto', padding: '1.5rem 1rem 4rem', boxSizing: 'border-box', overflowX: 'hidden' }}>
 
       {/* ── Page title + tab switcher ── */}
       <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem' }}>
@@ -245,7 +245,7 @@ export default function AdminOrders() {
       {tab === 'orders' && (
         <>
           {/* Stat Cards */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.85rem', marginBottom: '1.5rem' }}>
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(130px, 1fr))', gap: '0.65rem', marginBottom: '1.25rem' }}>
             <StatCard label="Total Orders" value={totalOrders} icon={<Package size={20} />} accent="#3b82f6" />
             <StatCard label="Pending" value={pendingOrders} icon={<Clock size={20} />} accent="#f59e0b" />
             <StatCard label="Completed" value={completedOrders} icon={<CheckCircle size={20} />} accent="#22c55e" />
@@ -335,7 +335,7 @@ export default function AdminOrders() {
                     <div
                       onClick={() => toggleExpand(order.id)}
                       style={{
-                        display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.75rem 1.5rem',
+                        display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.5rem 1rem',
                         padding: '0.9rem 1.1rem', cursor: 'pointer',
                         background: isExpanded ? 'var(--muted)' : 'var(--card)',
                         transition: 'background 0.2s',
@@ -403,9 +403,12 @@ export default function AdminOrders() {
                       <div style={{
                         borderTop: '1px solid var(--border)',
                         display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))',
                         gap: '1.25rem',
                         padding: '1.25rem',
+                        overflow: 'hidden',
+                        width: '100%',
+                        boxSizing: 'border-box',
                       }}>
 
                         {/* Items */}

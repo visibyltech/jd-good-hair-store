@@ -210,7 +210,7 @@ export default function ProductForm() {
     : 0;
 
   return (
-    <div style={{ maxWidth: 760, margin: '0 auto' }}>
+    <div style={{ width: '100%', maxWidth: 760, margin: '0 auto', boxSizing: 'border-box' }}>
       {/* Back link */}
       <Link
         to="/admin"
@@ -292,7 +292,7 @@ export default function ProductForm() {
             </FieldGroup>
 
             {/* Category + Length + Tag */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr', gap: 16 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
               <FieldGroup label="Category" icon={<Tag size={14} />} accent={catColor.text}>
                 <div style={{ position: 'relative' }}>
                   <select
@@ -372,7 +372,7 @@ export default function ProductForm() {
             </div>
 
             {/* Prices */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: 16 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: 16 }}>
               <FieldGroup label="Full Price (₦)" icon={<DollarSign size={14} />} accent="var(--primary)">
                 <div style={{ position: 'relative' }}>
                   <span style={{ position: 'absolute', left: 14, top: '50%', transform: 'translateY(-50%)', color: '#6b7280', fontWeight: 700, fontSize: 14 }}>₦</span>
@@ -412,7 +412,7 @@ export default function ProductForm() {
             </div>
 
             {/* Inventory & Visibility */}
-            <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr 1fr 1fr', gap: 16 }}>
+            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))', gap: 16 }}>
               <FieldGroup label="Items Left" icon={<Tag size={14} />} accent="#059669">
                 <input
                   type="number" name="items_left" value={formData.items_left}
