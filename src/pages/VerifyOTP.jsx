@@ -102,10 +102,13 @@ export default function VerifyOTP() {
           navigate('/login');
           return;
         }
-      }
 
-      // Generate and store new OTP via Resend
-      await generateAndStoreOTP(email, 'email_verification');
+        // Generate and store new OTP, passing user's name for the email template
+        const userName = userData.firstName || 'Customer';
+        await generateAndStoreOTP(email, 'email_verification', userName);
+      } else {
+        await generateAndStoreOTP(email, 'email_verification');
+      }
 
       toast.success('A new OTP has been sent to your email.');
       setOtp(['', '', '', '', '', '']);

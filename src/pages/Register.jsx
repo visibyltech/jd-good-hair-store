@@ -85,7 +85,7 @@ export default function Register() {
 
       // Send OTP for all users — admin access is granted via Firestore role, not registration bypass
       try {
-        await generateAndStoreOTP(formData.email, 'email_verification');
+        await generateAndStoreOTP(formData.email, 'email_verification', formData.firstName);
       } catch (otpErr) {
         console.error('OTP generation error:', otpErr);
         toast.error('Failed to send verification email. You can resend it on the next page.');

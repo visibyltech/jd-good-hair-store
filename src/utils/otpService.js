@@ -1,5 +1,6 @@
 import { collection, addDoc, query, where, getDocs, updateDoc, doc, Timestamp, deleteDoc } from 'firebase/firestore';
 import { db } from '../firebase';
+import emailjs from '@emailjs/browser';
 
 /**
  * OTP Service - Handles OTP generation, storage, and verification
@@ -40,22 +41,29 @@ export const verifyOTPHash = async (otp, hash) => {
   return computedHash === hash;
 };
 
-export const sendEmailViaResend = async ({ to, subject, html, text }) => {
+export const sendEmailViaEmailJS = async ({ to_email, otp, name, subject, order_id = '' }) => {
+  const serviceId = import.meta.env.VITE_EMAILJS_SERVICE_ID;
+  const templateId = import.meta.env.VITE_EMAILJS_TEMPLATE_ID;
+  const publicKey = import.meta.env.VITE_EMAILJS_PUBLIC_KEY;
+
+  if (!serviceId || !templateId || !publicKey) {
+    console.warn('EmailJS credentials missing from .env');
+    return false;
+  }
+
   try {
-    const response = await fetch('/api/send-email', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ to, subject, html, text })
-    });
+    const templateParams = {
+      to_email,
+      otp,
+      name,
+      subject,
+      order_id,
+    };
     
-    if (!response.ok) {
-      const err = await response.json();
-      console.warn('Resend failed (may be expected in local dev without vercel dev):', err);
-      return false;
-    }
-    return await response.json();
+    const response = await emailjs.send(serviceId, templateId, templateParams, publicKey);
+    return response.status === 200;
   } catch (error) {
-    console.warn('Failed to send email via Resend API proxy. Make sure you use Vercel for deployment or vercel dev locally:', error);
+    console.error('EmailJS Error:', error);
     return false;
   }
 };
@@ -66,9 +74,12 @@ export const sendEmailViaResend = async ({ to, subject, html, text }) => {
  * @param {string} type - OTP type ('registration' | 'password_reset' | 'email_verification')
  * @returns {Promise<string>} The generated OTP
  */
-export const generateAndStoreOTP = async (email, type = 'registration') => {
+export const generateAndStoreOTP = async (email, type = 'registration', name = 'Customer') => {
   try {
     const otp = generateOTP();
+    // For local development: print the OTP so the developer can log in
+    console.log(`[DEV ONLY] Generated OTP for ${email}: %c${otp}`, 'font-size: 20px; font-weight: bold; color: #df4c89;');
+    
     const hashedOTP = await hashOTP(otp);
     const expiresAt = Timestamp.fromDate(
       new Date(Date.now() + OTP_EXPIRATION_MINUTES * 60 * 1000)
@@ -85,19 +96,12 @@ export const generateAndStoreOTP = async (email, type = 'registration') => {
       max_attempts: 5
     });
 
-    // Send email via Resend
-    await sendEmailViaResend({
-      to: email,
-      subject: `Your OTP Code - JD Good Hair`,
-      html: `
-        <div style="font-family: sans-serif; text-align: center; padding: 20px;">
-          <h2>JD Good Hair</h2>
-          <p>Your one-time password is:</p>
-          <h1 style="letter-spacing: 5px; color: #df4c89;">${otp}</h1>
-          <p>This code will expire in ${OTP_EXPIRATION_MINUTES} minutes.</p>
-        </div>
-      `,
-      text: `Your OTP code for JD Good Hair is: ${otp}`
+    // Send email via EmailJS
+    await sendEmailViaEmailJS({
+      to_email: email,
+      otp: otp,
+      name: name,
+      subject: 'Your OTP Code - JD Good Hair'
     });
 
     return otp;
@@ -175,6 +179,8 @@ export const verifyOTP = async (email, otp, type = 'registration') => {
 export const generateDeliveryOTP = async (orderId, deliveryEmail) => {
   try {
     const otp = generateOTP();
+    console.log(`[DEV ONLY] Generated Delivery OTP for Order ${orderId}: %c${otp}`, 'font-size: 20px; font-weight: bold; color: #df4c89;');
+    
     const hashedOTP = await hashOTP(otp);
     const expiresAt = Timestamp.fromDate(
       new Date(Date.now() + OTP_EXPIRATION_MINUTES * 60 * 1000)
@@ -192,20 +198,13 @@ export const generateDeliveryOTP = async (orderId, deliveryEmail) => {
       max_attempts: 5
     });
 
-    // Send the delivery confirmation email
-    await sendEmailViaResend({
-      to: deliveryEmail,
+    // Send the delivery confirmation email via EmailJS
+    await sendEmailViaEmailJS({
+      to_email: deliveryEmail,
+      otp: otp,
+      name: 'Customer',
       subject: `Delivery Confirmation Code for Order #${orderId}`,
-      html: `
-        <div style="font-family: sans-serif; text-align: center; padding: 20px;">
-          <h2>Your package is out for delivery!</h2>
-          <p>Order #${orderId}</p>
-          <p>When your courier arrives, give them this 6-digit confirmation code:</p>
-          <h1 style="letter-spacing: 5px; color: #df4c89; padding: 15px; border: 2px dashed #df4c89; display: inline-block;">${otp}</h1>
-          <p><strong>Please do not share this code until your delivery arrives.</strong></p>
-        </div>
-      `,
-      text: `Your delivery confirmation code for Order #${orderId} is: ${otp}`
+      order_id: orderId
     });
 
     return otp;
