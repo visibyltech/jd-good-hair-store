@@ -41,29 +41,35 @@ export const verifyOTPHash = async (otp, hash) => {
   return computedHash === hash;
 };
 
-export const sendEmailViaEmailJS = async ({ to_email, otp, name, subject, order_id = '' }) => {
+export const sendEmailViaEmailJS = async ({ email, otp, name, subject, order_id = '' }) => {
   const serviceId = import.meta.env.VITE_EMAILJS_SERVICE_ID;
   const templateId = import.meta.env.VITE_EMAILJS_TEMPLATE_ID;
   const publicKey = import.meta.env.VITE_EMAILJS_PUBLIC_KEY;
 
+  console.log('[EmailJS] Attempting to send email to:', email);
+  console.log('[EmailJS] Service ID:', serviceId, '| Template ID:', templateId, '| Public Key:', publicKey ? '✓ set' : '✗ MISSING');
+
   if (!serviceId || !templateId || !publicKey) {
-    console.warn('EmailJS credentials missing from .env');
+    console.error('[EmailJS] ❌ Credentials missing from .env — did you restart the dev server after editing .env?');
     return false;
   }
 
   try {
     const templateParams = {
-      to_email,
+      email,
       otp,
       name,
       subject,
       order_id,
     };
-    
+
+    console.log('[EmailJS] Sending with params:', templateParams);
     const response = await emailjs.send(serviceId, templateId, templateParams, publicKey);
+    console.log('[EmailJS] ✅ Email sent successfully! Status:', response.status, response.text);
     return response.status === 200;
   } catch (error) {
-    console.error('EmailJS Error:', error);
+    console.error('[EmailJS] ❌ Failed to send email. Full error:', error);
+    if (error?.text) console.error('[EmailJS] Error text:', error.text);
     return false;
   }
 };
@@ -98,7 +104,7 @@ export const generateAndStoreOTP = async (email, type = 'registration', name = '
 
     // Send email via EmailJS
     await sendEmailViaEmailJS({
-      to_email: email,
+      email: email,
       otp: otp,
       name: name,
       subject: 'Your OTP Code - JD Good Hair'
@@ -200,7 +206,7 @@ export const generateDeliveryOTP = async (orderId, deliveryEmail) => {
 
     // Send the delivery confirmation email via EmailJS
     await sendEmailViaEmailJS({
-      to_email: deliveryEmail,
+      email: deliveryEmail,
       otp: otp,
       name: 'Customer',
       subject: `Delivery Confirmation Code for Order #${orderId}`,
