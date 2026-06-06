@@ -1,40 +1,56 @@
 import { create } from 'zustand';
 import { onAuthStateChanged, signOut } from 'firebase/auth';
 import { auth, db } from '../firebase';
-import { doc, getDoc } from 'firebase/firestore';
+import { doc, onSnapshot } from 'firebase/firestore';
+
+let unsubscribeUser = null;
 
 const useAuthStore = create((set) => ({
   user: null,
   isAdmin: false,
   loading: true,
   init: () => {
-    onAuthStateChanged(auth, async (user) => {
-      let isAdmin = false;
-      let userData = null;
+    onAuthStateChanged(auth, (user) => {
+      // Clear previous listener if any
+      if (unsubscribeUser) {
+        unsubscribeUser();
+        unsubscribeUser = null;
+      }
 
       if (user) {
-        try {
-          const userDoc = await getDoc(doc(db, 'users', user.uid));
+        // Use onSnapshot to immediately catch 'isAdmin' boolean changes from Firestore
+        unsubscribeUser = onSnapshot(doc(db, 'users', user.uid), (userDoc) => {
+          let isAdmin = false;
+          let userData = null;
+
           if (userDoc.exists()) {
             userData = userDoc.data();
-            isAdmin = userData.role === 'admin';
+            // Explicitly check the isAdmin boolean from Firestore, or role
+            isAdmin = userData?.isAdmin === true || userData?.role === 'admin';
           }
-        } catch (err) {
-          console.error("Error fetching user role:", err);
-        }
+
+          set({ 
+            user, 
+            userData,
+            isAdmin,
+            loading: false 
+          });
+        }, (err) => {
+          console.error("Error fetching user data:", err);
+          set({ user, userData: null, isAdmin: false, loading: false });
+        });
+      } else {
+        set({ user: null, userData: null, isAdmin: false, loading: false });
       }
-      
-      set({ 
-        user, 
-        userData,
-        isAdmin,
-        loading: false 
-      });
     });
   },
   logout: async () => {
+    if (unsubscribeUser) {
+      unsubscribeUser();
+      unsubscribeUser = null;
+    }
     await signOut(auth);
-    set({ user: null, isAdmin: false });
+    set({ user: null, isAdmin: false, userData: null });
   }
 }));
 

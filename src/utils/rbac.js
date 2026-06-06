@@ -16,8 +16,7 @@ export const USER_ROLES = {
  * @returns {boolean}
  */
 export const isAdmin = (user, userData = null) => {
-  if (userData?.role === USER_ROLES.ADMIN) return true;
-  return user?.email === 'zealmart.ng@gmail.com' || user?.email === 'zenobianewworld@gmail.com';
+  return userData?.role === USER_ROLES.ADMIN || userData?.isAdmin === true;
 };
 
 /**
