@@ -1,566 +1,740 @@
 import { useState, useEffect } from 'react';
-import { collection, doc, updateDoc, query, orderBy, getDoc, onSnapshot } from 'firebase/firestore';
+import {
+  collection, doc, updateDoc, query, orderBy,
+  getDoc, onSnapshot, getDocs
+} from 'firebase/firestore';
 import { db } from '../../firebase';
-import { Package, CheckCircle, Clock, Bell, Users, AlertCircle, Search, ChevronDown, ChevronUp, SlidersHorizontal, Truck, Link as LinkIcon, Copy, X } from 'lucide-react';
+import {
+  Package, CheckCircle, Clock, Bell, Users, AlertCircle,
+  Search, ChevronDown, ChevronUp, SlidersHorizontal,
+  Truck, Link as LinkIcon, Copy, X, UserCheck, Mail, Phone
+} from 'lucide-react';
 import { shipOrder } from '../../utils/orderTrackingService';
 
-function fmt(n) {
-  return '₦' + Math.ceil(n).toLocaleString('en-NG');
+/* ─── Helpers ─────────────────────────────────────── */
+function fmt(n) { return '₦' + Math.ceil(n).toLocaleString('en-NG'); }
+
+const STATUS_COLORS = {
+  Completed: { bg: '#dcfce7', color: '#15803d', dot: '#16a34a' },
+  'Processing (Installments)': { bg: '#fef3c7', color: '#b45309', dot: '#d97706' },
+  default: { bg: '#f1f5f9', color: '#475569', dot: '#94a3b8' },
+};
+
+const TRACKING_COLORS = {
+  Delivered: { bg: '#f3e8ff', color: '#6d28d9' },
+  Shipped:   { bg: '#dbeafe', color: '#1d4ed8' },
+  default:   { bg: '#f1f5f9', color: '#475569' },
+};
+
+/* ─── Stat Card ────────────────────────────────────── */
+function StatCard({ label, value, icon, accent }) {
+  return (
+    <div style={{
+      background: 'var(--card)', border: '1px solid var(--border)',
+      borderRadius: 'var(--radius)', padding: '1.1rem 1.25rem',
+      display: 'flex', alignItems: 'center', gap: '1rem',
+      boxShadow: 'var(--shadow-card)',
+    }}>
+      <div style={{
+        width: '44px', height: '44px', borderRadius: '50%',
+        background: `${accent}18`, display: 'flex', alignItems: 'center',
+        justifyContent: 'center', color: accent, flexShrink: 0,
+      }}>{icon}</div>
+      <div>
+        <div style={{ fontSize: '0.72rem', fontWeight: 700, color: 'var(--muted-fg)', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: '0.2rem' }}>{label}</div>
+        <div style={{ fontFamily: 'var(--font-display)', fontSize: '1.6rem', fontWeight: 800, color: 'var(--foreground)', lineHeight: 1 }}>{value}</div>
+      </div>
+    </div>
+  );
 }
 
+/* ─── Badge ────────────────────────────────────────── */
+function Badge({ label, colors }) {
+  return (
+    <span style={{
+      display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+      padding: '0.25rem 0.65rem', borderRadius: '9999px',
+      fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase',
+      background: colors.bg, color: colors.color, whiteSpace: 'nowrap',
+    }}>{label}</span>
+  );
+}
+
+/* ─── Main Component ───────────────────────────────── */
 export default function AdminOrders() {
+  const [tab, setTab] = useState('orders'); // 'orders' | 'users'
   const [orders, setOrders] = useState([]);
+  const [registeredUsers, setRegisteredUsers] = useState([]);
   const [loading, setLoading] = useState(true);
+  const [usersLoading, setUsersLoading] = useState(false);
   const [error, setError] = useState('');
   const [updating, setUpdating] = useState(false);
   const [newlyCompleted, setNewlyCompleted] = useState(new Set());
   const [userCache, setUserCache] = useState({});
   const [selectedCustomerProfile, setSelectedCustomerProfile] = useState(null);
 
+  /* Search / filter / sort */
+  const [searchTerm, setSearchTerm] = useState('');
+  const [statusFilter, setStatusFilter] = useState('All');
+  const [sortBy, setSortBy] = useState('newest');
+  const [expandedOrders, setExpandedOrders] = useState(new Set());
+
+  /* Users search */
+  const [userSearch, setUserSearch] = useState('');
+
+  /* ── Orders listener ── */
   useEffect(() => {
     setLoading(true);
-    const q = query(collection(db, "orders"), orderBy("createdAt", "desc"));
-    
-    const unsubscribe = onSnapshot(q, async (snapshot) => {
+    const q = query(collection(db, 'orders'), orderBy('createdAt', 'desc'));
+    const unsub = onSnapshot(q, async (snap) => {
       try {
-        const ordersData = snapshot.docs.map(d => ({ id: d.id, ...d.data() }));
-        setOrders(ordersData);
-
-        const uniqueUserIds = [...new Set(ordersData.map(o => o.userId).filter(Boolean))];
+        const data = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+        setOrders(data);
+        const uids = [...new Set(data.map(o => o.userId).filter(Boolean))];
         const cache = { ...userCache };
-        
-        // Only fetch users we don't already have in cache
-        const missingUserIds = uniqueUserIds.filter(uid => !cache[uid]);
-        
-        await Promise.all(
-          missingUserIds.map(async (uid) => {
-            try {
-              const userSnap = await getDoc(doc(db, "users", uid));
-              if (userSnap.exists()) {
-                cache[uid] = userSnap.data();
-              }
-            } catch {
-              // silently skip
-            }
-          })
-        );
-        
+        await Promise.all(uids.filter(u => !cache[u]).map(async uid => {
+          try {
+            const s = await getDoc(doc(db, 'users', uid));
+            if (s.exists()) cache[uid] = s.data();
+          } catch { /* skip */ }
+        }));
         setUserCache(cache);
         setLoading(false);
-      } catch (err) {
-        console.error(err);
-        setError("Failed to process orders data");
-        setLoading(false);
-      }
-    }, (err) => {
-      console.error(err);
-      if (err.message && err.message.toLowerCase().includes('offline')) {
-        setError("Please check your internet connection and try again.");
-      } else {
-        setError("Failed to fetch orders");
-      }
+      } catch (e) { console.error(e); setError('Failed to load orders'); setLoading(false); }
+    }, (e) => {
+      setError('Failed to fetch orders — check connection.');
       setLoading(false);
     });
-
-    return () => unsubscribe();
+    return () => unsub();
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
+  /* ── Fetch registered users when tab is switched ── */
+  useEffect(() => {
+    if (tab !== 'users' || registeredUsers.length > 0) return;
+    setUsersLoading(true);
+    getDocs(collection(db, 'users')).then(snap => {
+      setRegisteredUsers(snap.docs.map(d => ({ id: d.id, ...d.data() })));
+      setUsersLoading(false);
+    }).catch(() => setUsersLoading(false));
+  }, [tab, registeredUsers.length]);
+
+  /* ── Handlers ── */
   const handleUpdateAmountPaid = async (orderId, newAmount, totalAmount) => {
     setUpdating(true);
     try {
-      const orderRef = doc(db, "orders", orderId);
       const updates = { amountPaid: Number(newAmount) };
-
-      const wasComplete = Number(newAmount) >= totalAmount;
-      if (wasComplete) {
+      if (Number(newAmount) >= totalAmount) {
         updates.status = 'Completed';
         setNewlyCompleted(prev => new Set([...prev, orderId]));
       } else if (Number(newAmount) > 0) {
         updates.status = 'Processing (Installments)';
       }
-
-      await updateDoc(orderRef, updates);
-      setOrders(orders.map(o => o.id === orderId ? { ...o, ...updates } : o));
-    } catch (err) {
-      console.error(err);
-      alert("Failed to update payment amount");
-    } finally {
-      setUpdating(false);
-    }
+      await updateDoc(doc(db, 'orders', orderId), updates);
+      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, ...updates } : o));
+    } catch { alert('Failed to update payment amount'); } finally { setUpdating(false); }
   };
 
-  const handleShipOrder = async (orderId, customerEmail) => {
-    if (!window.confirm("Are you sure you want to mark this order as Shipped? This will generate a rider token and start the delivery timer.")) return;
+  const handleShipOrder = async (orderId, email) => {
+    if (!window.confirm('Mark this order as Shipped? A rider token will be generated.')) return;
     setUpdating(true);
     try {
-      const { tracking_status, delivery_token } = await shipOrder(orderId, customerEmail);
-      setOrders(orders.map(o => o.id === orderId ? { ...o, tracking_status, delivery_token } : o));
-      alert("Order marked as Shipped! Rider token generated.");
-    } catch (err) {
-      console.error(err);
-      alert("Failed to ship order: " + err.message);
-    } finally {
-      setUpdating(false);
-    }
+      const { tracking_status, delivery_token } = await shipOrder(orderId, email);
+      setOrders(prev => prev.map(o => o.id === orderId ? { ...o, tracking_status, delivery_token } : o));
+      toast?.success?.('Order shipped!') || alert('Order marked as Shipped!');
+    } catch (e) { alert('Failed to ship: ' + e.message); } finally { setUpdating(false); }
   };
 
-  const totalOrders = orders.length;
-  const completedOrders = orders.filter(o => o.status === 'Completed').length;
-  const pendingOrders = orders.filter(o => o.status !== 'Completed').length;
+  const toggleExpand = (id) => setExpandedOrders(prev => {
+    const s = new Set(prev);
+    s.has(id) ? s.delete(id) : s.add(id);
+    return s;
+  });
 
-  const [searchTerm, setSearchTerm] = useState('');
-  const [statusFilter, setStatusFilter] = useState('All Orders');
-  const [sortBy, setSortBy] = useState('Date (Newest First)');
-  const [expandedOrders, setExpandedOrders] = useState(new Set());
-
-  const toggleOrderExpand = (id) => {
-    setExpandedOrders(prev => {
-      const next = new Set(prev);
-      if (next.has(id)) next.delete(id);
-      else next.add(id);
-      return next;
-    });
-  };
-
+  /* ── Derived data ── */
   const filteredOrders = orders.filter(o => {
     if (statusFilter === 'Completed' && o.status !== 'Completed') return false;
-    if (statusFilter === 'Processing (Installments)' && o.status === 'Completed') return false;
+    if (statusFilter === 'Pending' && o.status === 'Completed') return false;
     if (searchTerm) {
-      const term = searchTerm.toLowerCase();
-      if (o.id.toLowerCase().includes(term)) return true;
-      const customer = userCache[o.userId];
-      if (customer) {
-        if (`${customer.firstName} ${customer.lastName}`.toLowerCase().includes(term)) return true;
-        if (customer.email?.toLowerCase().includes(term)) return true;
-        if (customer.phone?.includes(term)) return true;
+      const t = searchTerm.toLowerCase();
+      if (o.id.toLowerCase().includes(t)) return true;
+      const u = userCache[o.userId];
+      if (u) {
+        if (`${u.firstName} ${u.lastName}`.toLowerCase().includes(t)) return true;
+        if (u.email?.toLowerCase().includes(t)) return true;
+        if (u.phone?.includes(t)) return true;
       }
       return false;
     }
     return true;
   }).sort((a, b) => {
-    if (sortBy === 'Date (Newest First)') return b.createdAt?.toMillis() - a.createdAt?.toMillis();
-    if (sortBy === 'Date (Oldest First)') return a.createdAt?.toMillis() - b.createdAt?.toMillis();
-    if (sortBy === 'Total Amount (High to Low)') return b.totalAmount - a.totalAmount;
-    if (sortBy === 'Total Amount (Low to High)') return a.totalAmount - b.totalAmount;
+    if (sortBy === 'newest') return (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0);
+    if (sortBy === 'oldest') return (a.createdAt?.toMillis() || 0) - (b.createdAt?.toMillis() || 0);
+    if (sortBy === 'high') return b.totalAmount - a.totalAmount;
+    if (sortBy === 'low') return a.totalAmount - b.totalAmount;
     return 0;
   });
 
+  const filteredUsers = registeredUsers.filter(u => {
+    if (!userSearch) return true;
+    const t = userSearch.toLowerCase();
+    return (
+      `${u.firstName} ${u.lastName}`.toLowerCase().includes(t) ||
+      u.email?.toLowerCase().includes(t) ||
+      u.phone?.includes(t)
+    );
+  });
+
+  const totalOrders = orders.length;
+  const completedOrders = orders.filter(o => o.status === 'Completed').length;
+  const pendingOrders = totalOrders - completedOrders;
+
+  /* ── Styles ── */
+  const inputStyle = {
+    padding: '0.6rem 0.9rem', border: '1px solid var(--border)',
+    borderRadius: 'var(--radius)', fontSize: '0.875rem',
+    fontFamily: 'var(--font-body)', color: 'var(--foreground)',
+    background: 'var(--background)', outline: 'none', width: '100%',
+  };
+
+  /* ── Loading / Error ── */
   if (loading) return (
-    <div className="flex flex-col items-center justify-center py-20 text-gray-400">
-      <Clock size={40} className="mb-4 animate-pulse text-zeal-blue" />
-      <h2 className="text-xl font-bold font-display uppercase tracking-widest text-gray-500">Loading Orders...</h2>
+    <div style={{ padding: '4rem', textAlign: 'center', color: 'var(--muted-fg)' }}>
+      <Clock size={36} style={{ margin: '0 auto 1rem', display: 'block', color: 'var(--primary)', opacity: 0.6 }} />
+      Loading orders…
     </div>
   );
-
   if (error) return (
-    <div className="bg-red-50 border border-red-200 text-red-700 px-4 py-3 rounded-sm mb-8 font-medium flex items-center gap-2">
-      <AlertCircle size={20} /> {error}
+    <div style={{ margin: '2rem', padding: '1rem 1.25rem', background: '#fef2f2', border: '1px solid #fecaca', borderRadius: 'var(--radius)', color: '#b91c1c', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
+      <AlertCircle size={18} /> {error}
     </div>
   );
 
   return (
-    <div className="max-w-7xl mx-auto">
-      <h1 className="text-2xl font-black font-display uppercase tracking-wider text-gray-900 mb-6">Customer Orders</h1>
+    <div style={{ maxWidth: '1200px', margin: '0 auto', padding: '1.5rem 1rem 4rem' }}>
 
-      {/* Summary Bar */}
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-4 mb-8">
-        {[
-          { label: 'Total Orders', value: totalOrders, icon: <Package size={20} />, color: 'text-blue-600', bg: 'bg-blue-50', border: 'border-blue-100' },
-          { label: 'Pending Payment', value: pendingOrders, icon: <AlertCircle size={20} />, color: 'text-amber-600', bg: 'bg-amber-50', border: 'border-amber-100' },
-          { label: 'Completed', value: completedOrders, icon: <CheckCircle size={20} />, color: 'text-green-600', bg: 'bg-green-50', border: 'border-green-100' },
-        ].map(stat => (
-          <div key={stat.label} className={`bg-white rounded-sm border ${stat.border} p-5 flex items-center gap-4 shadow-sm hover:shadow-md transition-shadow`}>
-            <div className={`${stat.bg} ${stat.color} p-3 rounded-full flex-shrink-0`}>
-              {stat.icon}
-            </div>
-            <div>
-              <div className="text-xs font-bold text-gray-400 uppercase tracking-wider mb-1">{stat.label}</div>
-              <div className="font-black text-2xl text-gray-900 font-display">{stat.value}</div>
-            </div>
-          </div>
-        ))}
+      {/* ── Page title + tab switcher ── */}
+      <div style={{ display: 'flex', flexWrap: 'wrap', justifyContent: 'space-between', alignItems: 'center', gap: '1rem', marginBottom: '1.5rem' }}>
+        <h1 style={{ fontFamily: 'var(--font-display)', fontSize: '1.6rem', margin: 0 }}>
+          {tab === 'orders' ? 'Customer Orders' : 'Registered Users'}
+        </h1>
+        {/* Tab buttons */}
+        <div style={{ display: 'flex', gap: '0.5rem', background: 'var(--muted)', borderRadius: 'var(--radius)', padding: '0.3rem' }}>
+          {[
+            { key: 'orders', label: 'Orders', icon: <Package size={15} /> },
+            { key: 'users',  label: 'Users',  icon: <Users size={15} /> },
+          ].map(t => (
+            <button key={t.key} onClick={() => setTab(t.key)} style={{
+              display: 'flex', alignItems: 'center', gap: '0.4rem',
+              padding: '0.5rem 1.1rem', borderRadius: 'calc(var(--radius) - 2px)',
+              border: 'none', fontSize: '0.85rem', fontWeight: 700, cursor: 'pointer',
+              background: tab === t.key ? 'var(--card)' : 'transparent',
+              color: tab === t.key ? 'var(--primary)' : 'var(--muted-fg)',
+              boxShadow: tab === t.key ? '0 1px 4px rgba(0,0,0,0.08)' : 'none',
+              transition: 'all 0.2s',
+            }}>
+              {t.icon} {t.label}
+            </button>
+          ))}
+        </div>
       </div>
 
-      {/* Newly completed notifications */}
-      {newlyCompleted.size > 0 && (
-        <div className="bg-green-50 border border-green-200 text-green-800 px-5 py-4 rounded-sm mb-6 flex items-center gap-3 font-bold text-sm shadow-sm animate-pulse">
-          <Bell size={20} className="text-green-600" />
-          🎉 {newlyCompleted.size} order{newlyCompleted.size > 1 ? 's' : ''} just marked as fully paid and ready to ship!
-        </div>
-      )}
-
-      {orders.length > 0 && (
-        <div className="bg-white border border-gray-200 p-4 rounded-sm mb-6 flex flex-col md:flex-row gap-4 items-center shadow-sm">
-          <div className="relative flex-grow w-full md:w-auto">
-            <Search size={16} className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400" />
-            <input
-              type="text"
-              placeholder="Search by Order ID, Name, Email..."
-              value={searchTerm}
-              onChange={(e) => setSearchTerm(e.target.value)}
-              className="w-full pl-9 pr-3 py-2 bg-gray-50 border border-gray-200 rounded-sm text-sm font-medium focus:border-zeal-blue outline-none transition-colors"
-            />
+      {/* ════════════════════════════════════════════════
+          ORDERS TAB
+      ════════════════════════════════════════════════ */}
+      {tab === 'orders' && (
+        <>
+          {/* Stat Cards */}
+          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '0.85rem', marginBottom: '1.5rem' }}>
+            <StatCard label="Total Orders" value={totalOrders} icon={<Package size={20} />} accent="#3b82f6" />
+            <StatCard label="Pending" value={pendingOrders} icon={<Clock size={20} />} accent="#f59e0b" />
+            <StatCard label="Completed" value={completedOrders} icon={<CheckCircle size={20} />} accent="#22c55e" />
           </div>
-          <select
-            value={statusFilter}
-            onChange={(e) => setStatusFilter(e.target.value)}
-            className="w-full md:w-auto bg-gray-50 border border-gray-200 rounded-sm px-3 py-2 text-sm font-medium text-gray-700 outline-none focus:border-zeal-blue transition-colors"
-          >
-            <option>All Orders</option>
-            <option>Completed</option>
-            <option>Processing (Installments)</option>
-          </select>
-          <div className="flex items-center gap-2 w-full md:w-auto bg-gray-50 border border-gray-200 rounded-sm px-3 py-2 focus-within:border-zeal-blue transition-colors">
-            <SlidersHorizontal size={14} className="text-gray-400" />
-            <select
-              value={sortBy}
-              onChange={(e) => setSortBy(e.target.value)}
-              className="bg-transparent text-sm font-medium text-gray-700 outline-none w-full"
-            >
-              <option>Date (Newest First)</option>
-              <option>Date (Oldest First)</option>
-              <option>Total Amount (High to Low)</option>
-              <option>Total Amount (Low to High)</option>
+
+          {/* Newly-completed banner */}
+          {newlyCompleted.size > 0 && (
+            <div style={{ marginBottom: '1rem', padding: '0.85rem 1.25rem', background: '#dcfce7', border: '1px solid #86efac', borderRadius: 'var(--radius)', display: 'flex', alignItems: 'center', gap: '0.6rem', color: '#15803d', fontWeight: 700, fontSize: '0.9rem' }}>
+              <Bell size={18} /> 🎉 {newlyCompleted.size} order{newlyCompleted.size > 1 ? 's' : ''} fully paid and ready to ship!
+            </div>
+          )}
+
+          {/* Filters */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '0.65rem', marginBottom: '1.25rem', background: 'var(--card)', padding: '0.85rem', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
+            {/* Search */}
+            <div style={{ position: 'relative', flex: '1 1 180px', minWidth: '160px' }}>
+              <Search size={15} style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--muted-fg)' }} />
+              <input style={{ ...inputStyle, paddingLeft: '2.2rem' }} placeholder="Search orders…" value={searchTerm} onChange={e => setSearchTerm(e.target.value)} />
+            </div>
+            {/* Status */}
+            <select style={{ ...inputStyle, flex: '0 1 auto', width: 'auto' }} value={statusFilter} onChange={e => setStatusFilter(e.target.value)}>
+              <option value="All">All Orders</option>
+              <option value="Completed">Completed</option>
+              <option value="Pending">Pending</option>
             </select>
+            {/* Sort */}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flex: '0 1 auto' }}>
+              <SlidersHorizontal size={14} color="var(--muted-fg)" />
+              <select style={{ ...inputStyle, width: 'auto' }} value={sortBy} onChange={e => setSortBy(e.target.value)}>
+                <option value="newest">Newest First</option>
+                <option value="oldest">Oldest First</option>
+                <option value="high">Amount: High → Low</option>
+                <option value="low">Amount: Low → High</option>
+              </select>
+            </div>
           </div>
-        </div>
-      )}
 
-      {filteredOrders.length === 0 ? (
-        <div className="bg-white border border-gray-200 p-12 rounded-sm text-center shadow-sm">
-          <Package size={48} className="mx-auto text-gray-300 mb-4" />
-          <p className="text-gray-500 font-medium">No orders match your criteria.</p>
-        </div>
-      ) : (
-        <div className="flex flex-col gap-6">
-          {filteredOrders.map((order) => {
-            const customer = userCache[order.userId];
-            const isNewlyComplete = newlyCompleted.has(order.id);
+          {/* Order List */}
+          {filteredOrders.length === 0 ? (
+            <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--muted-fg)', background: 'var(--card)', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
+              <Package size={40} style={{ margin: '0 auto 0.75rem', display: 'block', opacity: 0.3 }} />
+              No orders match your criteria.
+            </div>
+          ) : (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+              {filteredOrders.map(order => {
+                const customer = userCache[order.userId];
+                const isNewly = newlyCompleted.has(order.id);
+                const isComplete = order.amountPaid >= order.totalAmount;
+                const isExpanded = expandedOrders.has(order.id);
 
-            const isComplete = order.amountPaid >= order.totalAmount;
-            const combinedPeriodPayment = order.items?.reduce((acc, i) => acc + (i.paymentChoice === 'installment' ? (i.periodPayment || i.monthlyPayment) * i.quantity : 0), 0) || 0;
-            const isWeekly = order.items?.some(i => i.paymentFrequency === 'weekly');
-            const periodsPaid = combinedPeriodPayment > 0 ? Math.floor(order.amountPaid / combinedPeriodPayment) : 0;
-            const excessPaid = combinedPeriodPayment > 0 ? (order.amountPaid % combinedPeriodPayment) : 0;
-            
-            let nextPaymentDate = null;
-            let timerText = '';
-            let isOverdue = false;
+                const combinedPeriod = order.items?.reduce((acc, i) =>
+                  acc + (i.paymentChoice === 'installment' ? (i.periodPayment || i.monthlyPayment) * i.quantity : 0), 0) || 0;
+                const isWeekly = order.items?.some(i => i.paymentFrequency === 'weekly');
+                const periodsPaid = combinedPeriod > 0 ? Math.floor(order.amountPaid / combinedPeriod) : 0;
+                const excessPaid = combinedPeriod > 0 ? order.amountPaid % combinedPeriod : 0;
 
-            if (!isComplete && order.createdAt) {
-              nextPaymentDate = new Date(order.createdAt.toMillis());
-              if (isWeekly) {
-                nextPaymentDate.setDate(nextPaymentDate.getDate() + (periodsPaid + 1) * 7);
-              } else {
-                nextPaymentDate.setMonth(nextPaymentDate.getMonth() + (periodsPaid + 1));
-              }
+                let nextDate = null, timerText = '', isOverdue = false;
+                if (!isComplete && order.createdAt) {
+                  nextDate = new Date(order.createdAt.toMillis());
+                  isWeekly ? nextDate.setDate(nextDate.getDate() + (periodsPaid + 1) * 7)
+                           : nextDate.setMonth(nextDate.getMonth() + (periodsPaid + 1));
+                  const diff = Math.ceil((nextDate - new Date()) / 86400000);
+                  if (diff < 0) { isOverdue = true; timerText = `Overdue by ${Math.abs(diff)} days`; }
+                  else if (diff === 0) { isOverdue = true; timerText = 'Due today!'; }
+                  else { timerText = `Due in ${diff} days`; }
+                }
 
-              const diffTime = nextPaymentDate.getTime() - new Date().getTime();
-              const diffDays = Math.ceil(diffTime / (1000 * 60 * 60 * 24));
-              if (diffDays < 0) {
-                isOverdue = true;
-                timerText = `Overdue by ${Math.abs(diffDays)} days`;
-              } else if (diffDays === 0) {
-                timerText = `Due today!`;
-                isOverdue = true;
-              } else {
-                timerText = `Due in ${diffDays} days`;
-              }
-            }
+                const balance = order.totalAmount - order.amountPaid;
+                let defAmt = Math.min(balance, excessPaid > 0 ? combinedPeriod - excessPaid : combinedPeriod);
 
-            const balance = order.totalAmount - order.amountPaid;
-            let defaultCustomAmount = combinedPeriodPayment;
-            if (excessPaid > 0 && combinedPeriodPayment > 0) {
-              defaultCustomAmount = combinedPeriodPayment - excessPaid;
-            }
-            defaultCustomAmount = Math.min(balance, defaultCustomAmount);
+                const sc = STATUS_COLORS[order.status] || STATUS_COLORS.default;
 
-            return (
-              <div key={order.id} className={`bg-white rounded-sm border overflow-hidden shadow-sm transition-all ${isNewlyComplete ? 'border-green-400 ring-2 ring-green-100' : 'border-gray-200'}`}>
-                
-                {isNewlyComplete && (
-                  <div className="bg-green-50 text-green-800 px-5 py-2 text-xs font-bold flex items-center gap-2 border-b border-green-100">
-                    <Bell size={14} className="text-green-600" /> Payment complete — ready to ship!
-                  </div>
-                )}
-
-                <div 
-                  className={`flex flex-wrap justify-between items-center gap-4 p-5 cursor-pointer select-none transition-colors ${expandedOrders.has(order.id) ? 'border-b border-gray-100 bg-gray-50' : 'bg-white hover:bg-gray-50'}`}
-                  onClick={() => toggleOrderExpand(order.id)}
-                >
-                  <div className="min-w-[120px]">
-                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block mb-1">Order ID</span>
-                    <strong className="font-mono text-sm text-gray-800">#{order.id.slice(0, 12)}</strong>
-                  </div>
-                  <div className="min-w-[100px]">
-                    <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest block mb-1">Date</span>
-                    <strong className="text-sm text-gray-800">{order.createdAt?.toDate().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</strong>
-                  </div>
-                  
-                  <div 
-                    className="flex items-center gap-3 min-w-[200px] flex-grow hover:bg-gray-100 p-2 rounded transition-colors"
-                    onClick={(e) => { e.stopPropagation(); setSelectedCustomerProfile(order.userId); }}
-                  >
-                    <div className="w-10 h-10 rounded-full bg-zeal-dark text-white flex items-center justify-center font-black text-sm flex-shrink-0">
-                      {customer ? customer.firstName?.[0]?.toUpperCase() : <Users size={16} />}
-                    </div>
-                    <div className="min-w-0">
-                      <div className="font-bold text-sm text-gray-900 truncate">
-                        {customer ? `${customer.firstName} ${customer.lastName}` : 'Customer'}
-                      </div>
-                      <div className="text-xs font-medium text-gray-500 truncate">{customer?.email || order.userId}</div>
-                      {customer?.phone && <div className="text-[11px] text-gray-400 mt-0.5">{customer.phone}</div>}
-                    </div>
-                  </div>
-
-                  <div className="flex items-center gap-4 min-w-[150px] justify-end flex-grow">
-                    <div className="flex flex-col items-end gap-1.5">
-                      <span className="text-[10px] font-bold text-gray-400 uppercase tracking-widest">Status</span>
-                      <div className="flex gap-2">
-                        <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-sm text-xs font-bold uppercase tracking-wider ${order.status === 'Completed' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}>
-                          {order.status === 'Completed' ? <CheckCircle size={12} /> : <Clock size={12} />}
-                          {order.status}
-                        </span>
-                        {order.tracking_status && order.tracking_status !== 'Pending' && (
-                          <span className={`inline-flex items-center gap-1.5 px-3 py-1 rounded-sm text-xs font-bold uppercase tracking-wider ${order.tracking_status === 'Delivered' ? 'bg-purple-100 text-purple-800' : 'bg-blue-100 text-blue-800'}`}>
-                            <Truck size={12} />
-                            {order.tracking_status}
-                          </span>
-                        )}
-                      </div>
-                    </div>
-                    <div className="bg-white p-1.5 rounded border border-gray-200 text-gray-500 shadow-sm">
-                      {expandedOrders.has(order.id) ? <ChevronUp size={16} /> : <ChevronDown size={16} />}
-                    </div>
-                  </div>
-                </div>
-
-                {expandedOrders.has(order.id) && (
-                  <div className="p-6 grid grid-cols-1 lg:grid-cols-2 xl:grid-cols-3 gap-6 bg-white">
-                    
-                    {/* Items */}
-                    <div className="xl:col-span-1">
-                      <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4 border-b border-gray-100 pb-2">Items Ordered</h3>
-                      <div className="flex flex-col gap-4">
-                        {order.items?.map((item, idx) => (
-                          <div key={idx} className={`flex gap-4 pb-4 ${idx < order.items.length - 1 ? 'border-b border-gray-100' : ''}`}>
-                            <div className="w-16 h-16 bg-gray-50 border border-gray-100 rounded flex items-center justify-center flex-shrink-0 p-1">
-                              <img src={item.img} alt={item.name} loading="lazy" className="max-w-full max-h-full object-contain" />
-                            </div>
-                            <div>
-                              <div className="font-bold text-sm text-gray-800 mb-1 leading-snug line-clamp-2">{item.name} <span className="text-gray-400 font-medium">×{item.quantity}</span></div>
-                              <div className="text-xs font-medium text-gray-500 mb-2">Length: {item.length}</div>
-                              <span className={`inline-block text-[10px] font-black px-2 py-1 rounded-sm uppercase tracking-wider ${item.paymentChoice === 'installment' ? 'bg-blue-50 text-blue-700' : 'bg-green-50 text-green-700'}`}>
-                                {item.paymentChoice === 'installment' ? `${item.paymentFrequency === 'weekly' ? item.installments + ' Weekly Payments' : item.installments + ' Monthly Payments'}` : 'Full Payment'}
-                              </span>
-                              <div className="text-xs font-bold mt-2">
-                                {item.paymentChoice === 'installment' && (item.periodPayment || item.monthlyPayment) ? (
-                                  <span className="text-gray-600">{fmt((item.periodPayment || item.monthlyPayment) * item.quantity)}<span className="text-gray-400 font-medium">/{item.paymentFrequency === 'weekly' ? 'wk' : 'mo'}</span></span>
-                                ) : item.paymentChoice === 'full' ? (
-                                  <span className="text-gray-900">{fmt(item.price * item.quantity)}</span>
-                                ) : null}
-                              </div>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
-                    </div>
-
-                    {/* Delivery Info */}
-                    {order.deliveryInfo && (
-                      <div className="xl:col-span-1 bg-gray-50 p-5 rounded-sm border border-gray-200">
-                        <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4 border-b border-gray-200 pb-2">Delivery Info</h3>
-                        <div className="text-sm text-gray-700 leading-relaxed">
-                          <p className="font-bold mb-1">{order.deliveryInfo.address}</p>
-                          <p className="mb-2">{order.deliveryInfo.city}, {order.deliveryInfo.state}</p>
-                          <p className="flex items-center gap-2 mb-4 font-medium"><i className="fas fa-phone text-gray-400"></i> {order.deliveryInfo.phone}</p>
-                          {order.deliveryInfo.instructions && (
-                            <div className="bg-white border border-gray-200 p-3 rounded-sm text-xs text-gray-500 italic shadow-sm">
-                              "{order.deliveryInfo.instructions}"
-                            </div>
-                          )}
-                        </div>
+                return (
+                  <div key={order.id} style={{
+                    background: 'var(--card)', border: `1px solid ${isNewly ? '#86efac' : 'var(--border)'}`,
+                    borderRadius: 'var(--radius)', overflow: 'hidden',
+                    boxShadow: isNewly ? '0 0 0 2px #bbf7d0' : 'var(--shadow-card)',
+                  }}>
+                    {isNewly && (
+                      <div style={{ padding: '0.4rem 1rem', background: '#dcfce7', borderBottom: '1px solid #86efac', fontSize: '0.78rem', fontWeight: 700, color: '#15803d', display: 'flex', alignItems: 'center', gap: '0.4rem' }}>
+                        <Bell size={13} /> Payment complete — ready to ship!
                       </div>
                     )}
 
-                    {/* Payment Tracker */}
-                    <div className="xl:col-span-1 bg-white border border-gray-200 p-5 rounded-sm shadow-sm">
-                      <h3 className="text-xs font-bold text-gray-400 uppercase tracking-widest mb-4 border-b border-gray-100 pb-2">Payment Tracker</h3>
-
-                      <div className="flex justify-between items-center mb-3 text-sm">
-                        <span className="font-medium text-gray-500">Total Required:</span>
-                        <strong className="text-gray-900 font-display">{fmt(order.totalAmount)}</strong>
+                    {/* Order Row Header (clickable to expand) */}
+                    <div
+                      onClick={() => toggleExpand(order.id)}
+                      style={{
+                        display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.75rem 1.5rem',
+                        padding: '0.9rem 1.1rem', cursor: 'pointer',
+                        background: isExpanded ? 'var(--muted)' : 'var(--card)',
+                        transition: 'background 0.2s',
+                      }}
+                    >
+                      {/* Order ID */}
+                      <div style={{ minWidth: '110px' }}>
+                        <div style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--muted-fg)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>Order</div>
+                        <div style={{ fontFamily: 'monospace', fontSize: '0.82rem', fontWeight: 700 }}>#{order.id.slice(0, 10)}</div>
                       </div>
 
-                      <div className="flex justify-between items-center mb-6">
-                        <span className="text-sm font-medium text-gray-500">Amount Paid:</span>
-                        <div className="relative">
-                          <span className="absolute left-3 top-1/2 -translate-y-1/2 text-gray-400 font-bold text-sm">₦</span>
-                          <input
-                            type="number"
-                            defaultValue={order.amountPaid}
-                            onBlur={(e) => {
-                              if (e.target.value !== String(order.amountPaid)) {
-                                handleUpdateAmountPaid(order.id, e.target.value, order.totalAmount);
-                              }
-                            }}
-                            disabled={updating}
-                            className="w-36 pl-8 pr-3 py-2 bg-white border-2 border-gray-200 rounded-sm text-sm font-black text-zeal-blue focus:border-zeal-blue outline-none transition-colors text-right disabled:opacity-50"
-                          />
+                      {/* Date */}
+                      <div style={{ minWidth: '90px' }}>
+                        <div style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--muted-fg)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>Date</div>
+                        <div style={{ fontSize: '0.82rem', fontWeight: 600 }}>
+                          {order.createdAt?.toDate().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
                         </div>
                       </div>
-                      
-                      {!isComplete && nextPaymentDate && (
-                        <div className="bg-blue-50 border border-blue-100 p-4 rounded-sm text-center mb-5">
-                          <div className="text-xs font-bold text-gray-500 uppercase tracking-wider mb-1">Next Payment Due</div>
-                          <div className="font-black text-zeal-blue mb-2">{nextPaymentDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}</div>
-                          <span className={`inline-block px-2.5 py-1 rounded text-[10px] font-bold uppercase tracking-wider mb-3 ${isOverdue ? 'bg-red-100 text-red-700' : 'bg-green-100 text-green-700'}`}>
-                            {timerText}
-                          </span>
-                          <div className="text-xs font-bold text-gray-700 bg-white py-1.5 px-3 rounded-sm border border-blue-200 inline-block shadow-sm">
-                            Expected: {fmt(defaultCustomAmount)}
+
+                      {/* Customer */}
+                      <div
+                        style={{ display: 'flex', alignItems: 'center', gap: '0.6rem', flex: '1 1 160px', cursor: 'pointer' }}
+                        onClick={e => { e.stopPropagation(); setSelectedCustomerProfile(order.userId); }}
+                      >
+                        <div style={{
+                          width: '36px', height: '36px', borderRadius: '50%', flexShrink: 0,
+                          background: 'var(--gradient-primary)', color: 'white',
+                          display: 'flex', alignItems: 'center', justifyContent: 'center',
+                          fontWeight: 800, fontSize: '0.9rem',
+                        }}>
+                          {customer?.firstName?.[0]?.toUpperCase() || <Users size={14} />}
+                        </div>
+                        <div style={{ minWidth: 0 }}>
+                          <div style={{ fontWeight: 700, fontSize: '0.875rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {customer ? `${customer.firstName} ${customer.lastName}` : 'Unknown'}
                           </div>
-                          {excessPaid > 0 && <div className="text-[10px] text-blue-500 font-medium mt-2">(Customer has {fmt(excessPaid)} credit towards this period)</div>}
+                          <div style={{ fontSize: '0.75rem', color: 'var(--muted-fg)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                            {customer?.email || order.userId}
+                          </div>
                         </div>
-                      )}
-
-                      <div className="w-full bg-gray-200 h-2.5 rounded-full overflow-hidden mb-2">
-                        <div 
-                          className={`h-full transition-all duration-1000 ${order.amountPaid >= order.totalAmount ? 'bg-green-500' : 'bg-zeal-blue'}`}
-                          style={{ width: `${Math.min(100, (order.amountPaid / order.totalAmount) * 100)}%` }} 
-                        />
                       </div>
-                      <div className="text-xs font-bold text-center text-gray-500 uppercase tracking-wider mb-4">
-                        {Math.round((order.amountPaid / order.totalAmount) * 100)}% Paid
-                        {order.amountPaid < order.totalAmount && (
-                          <span className="mx-1">• Balance: <span className="text-zeal-red">{fmt(order.totalAmount - order.amountPaid)}</span></span>
+
+                      {/* Amount */}
+                      <div style={{ textAlign: 'right', minWidth: '80px' }}>
+                        <div style={{ fontSize: '0.65rem', fontWeight: 700, color: 'var(--muted-fg)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>Total</div>
+                        <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: '0.95rem' }}>{fmt(order.totalAmount)}</div>
+                      </div>
+
+                      {/* Status */}
+                      <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', flexWrap: 'wrap' }}>
+                        <Badge label={order.status} colors={sc} />
+                        {order.tracking_status && order.tracking_status !== 'Pending' && (
+                          <Badge label={order.tracking_status} colors={TRACKING_COLORS[order.tracking_status] || TRACKING_COLORS.default} />
                         )}
                       </div>
 
-                      {order.amountPaid >= order.totalAmount && (
-                        <div className="bg-green-50 text-green-700 border border-green-200 px-4 py-3 rounded-sm text-xs font-bold flex flex-col items-center justify-center gap-2 uppercase tracking-wider mb-4">
-                          <div className="flex items-center gap-2"><CheckCircle size={16} className="text-green-500" /> Payment Complete</div>
-                          
-                          {(!order.tracking_status || order.tracking_status === 'Pending') && (
-                            <button 
-                              onClick={() => handleShipOrder(order.id, customer?.email || order.userId)}
-                              disabled={updating}
-                              className="mt-2 w-full bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 rounded-sm transition-colors flex justify-center items-center gap-2"
-                            >
-                              <Truck size={14} /> Mark as Shipped
+                      {/* Expand toggle */}
+                      <div style={{ marginLeft: 'auto', color: 'var(--muted-fg)', flexShrink: 0 }}>
+                        {isExpanded ? <ChevronUp size={18} /> : <ChevronDown size={18} />}
+                      </div>
+                    </div>
+
+                    {/* ── Expanded Detail ── */}
+                    {isExpanded && (
+                      <div style={{
+                        borderTop: '1px solid var(--border)',
+                        display: 'grid',
+                        gridTemplateColumns: 'repeat(auto-fit, minmax(260px, 1fr))',
+                        gap: '1.25rem',
+                        padding: '1.25rem',
+                      }}>
+
+                        {/* Items */}
+                        <div>
+                          <div style={{ fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--muted-fg)', marginBottom: '0.85rem' }}>Items Ordered</div>
+                          {order.items?.map((item, i) => (
+                            <div key={i} style={{ display: 'flex', gap: '0.75rem', paddingBottom: '0.85rem', marginBottom: '0.85rem', borderBottom: i < order.items.length - 1 ? '1px solid var(--border)' : 'none' }}>
+                              <div style={{ width: '56px', height: '56px', flexShrink: 0, borderRadius: '0.5rem', overflow: 'hidden', background: 'var(--muted)', border: '1px solid var(--border)' }}>
+                                <img src={item.img} alt={item.name} style={{ width: '100%', height: '100%', objectFit: 'cover' }} />
+                              </div>
+                              <div>
+                                <div style={{ fontWeight: 700, fontSize: '0.875rem', lineHeight: 1.3, marginBottom: '0.2rem' }}>{item.name} <span style={{ color: 'var(--muted-fg)', fontWeight: 400 }}>×{item.quantity}</span></div>
+                                <div style={{ fontSize: '0.75rem', color: 'var(--muted-fg)' }}>Length: {item.length}</div>
+                                <span style={{
+                                  display: 'inline-block', marginTop: '0.3rem',
+                                  padding: '0.15rem 0.6rem', borderRadius: '9999px',
+                                  fontSize: '0.65rem', fontWeight: 700, textTransform: 'uppercase',
+                                  background: item.paymentChoice === 'installment' ? '#dbeafe' : '#dcfce7',
+                                  color: item.paymentChoice === 'installment' ? '#1d4ed8' : '#15803d',
+                                }}>
+                                  {item.paymentChoice === 'installment'
+                                    ? `${item.installments} ${item.paymentFrequency === 'weekly' ? 'Weekly' : 'Monthly'} Payments`
+                                    : 'Full Payment'}
+                                </span>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+
+                        {/* Delivery Info */}
+                        {order.deliveryInfo && (
+                          <div style={{ background: 'var(--muted)', borderRadius: 'var(--radius)', padding: '1rem', border: '1px solid var(--border)' }}>
+                            <div style={{ fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--muted-fg)', marginBottom: '0.85rem' }}>Delivery Info</div>
+                            <div style={{ fontSize: '0.875rem', lineHeight: 1.7 }}>
+                              <div style={{ fontWeight: 700 }}>{order.deliveryInfo.address}</div>
+                              <div>{order.deliveryInfo.city}, {order.deliveryInfo.state}</div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', marginTop: '0.25rem', color: 'var(--muted-fg)' }}>
+                                <Phone size={13} /> {order.deliveryInfo.phone}
+                              </div>
+                              {order.deliveryInfo.instructions && (
+                                <div style={{ marginTop: '0.75rem', padding: '0.6rem', background: 'var(--card)', borderRadius: '0.5rem', fontSize: '0.8rem', color: 'var(--muted-fg)', fontStyle: 'italic' }}>
+                                  "{order.deliveryInfo.instructions}"
+                                </div>
+                              )}
+                            </div>
+                          </div>
+                        )}
+
+                        {/* Payment Tracker */}
+                        <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '1rem' }}>
+                          <div style={{ fontSize: '0.7rem', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.08em', color: 'var(--muted-fg)', marginBottom: '0.85rem' }}>Payment Tracker</div>
+
+                          <div style={{ display: 'flex', justifyContent: 'space-between', marginBottom: '0.5rem', fontSize: '0.875rem' }}>
+                            <span style={{ color: 'var(--muted-fg)' }}>Total:</span>
+                            <strong>{fmt(order.totalAmount)}</strong>
+                          </div>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '1rem', fontSize: '0.875rem' }}>
+                            <span style={{ color: 'var(--muted-fg)' }}>Amount Paid:</span>
+                            <div style={{ position: 'relative' }}>
+                              <span style={{ position: 'absolute', left: '0.6rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--muted-fg)', fontWeight: 700, pointerEvents: 'none' }}>₦</span>
+                              <input
+                                type="number"
+                                defaultValue={order.amountPaid}
+                                disabled={updating}
+                                onBlur={e => {
+                                  if (e.target.value !== String(order.amountPaid))
+                                    handleUpdateAmountPaid(order.id, e.target.value, order.totalAmount);
+                                }}
+                                style={{ width: '130px', paddingLeft: '1.6rem', paddingRight: '0.5rem', paddingTop: '0.5rem', paddingBottom: '0.5rem', border: '1.5px solid var(--border)', borderRadius: '0.5rem', fontWeight: 800, color: 'var(--primary)', fontSize: '0.9rem', textAlign: 'right', fontFamily: 'var(--font-body)', outline: 'none', background: 'var(--background)' }}
+                              />
+                            </div>
+                          </div>
+
+                          {/* Progress bar */}
+                          <div style={{ height: '6px', background: 'var(--border)', borderRadius: '9999px', overflow: 'hidden', marginBottom: '0.35rem' }}>
+                            <div style={{
+                              height: '100%', borderRadius: '9999px',
+                              background: isComplete ? '#22c55e' : 'var(--primary)',
+                              width: `${Math.min(100, (order.amountPaid / order.totalAmount) * 100)}%`,
+                              transition: 'width 0.6s ease',
+                            }} />
+                          </div>
+                          <div style={{ fontSize: '0.72rem', color: 'var(--muted-fg)', textAlign: 'center', marginBottom: '0.75rem' }}>
+                            {Math.round((order.amountPaid / order.totalAmount) * 100)}% paid
+                            {!isComplete && <span> · Balance: <strong style={{ color: 'hsl(0 72% 55%)' }}>{fmt(balance)}</strong></span>}
+                          </div>
+
+                          {/* Next payment */}
+                          {!isComplete && nextDate && (
+                            <div style={{ background: isOverdue ? '#fef2f2' : '#eff6ff', border: `1px solid ${isOverdue ? '#fecaca' : '#bfdbfe'}`, borderRadius: '0.5rem', padding: '0.75rem', textAlign: 'center', marginBottom: '0.75rem' }}>
+                              <div style={{ fontSize: '0.65rem', fontWeight: 700, color: isOverdue ? '#b91c1c' : '#1d4ed8', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: '0.3rem' }}>Next Payment</div>
+                              <div style={{ fontWeight: 800, color: isOverdue ? '#b91c1c' : '#1e40af', marginBottom: '0.2rem' }}>
+                                {nextDate.toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: 'numeric' })}
+                              </div>
+                              <span style={{ display: 'inline-block', padding: '0.2rem 0.6rem', borderRadius: '9999px', fontSize: '0.68rem', fontWeight: 700, background: isOverdue ? '#fecaca' : '#bfdbfe', color: isOverdue ? '#b91c1c' : '#1d4ed8' }}>{timerText}</span>
+                              <div style={{ marginTop: '0.4rem', fontSize: '0.75rem', fontWeight: 700 }}>Expected: {fmt(defAmt)}</div>
+                            </div>
+                          )}
+
+                          {/* Ship button */}
+                          {isComplete && (!order.tracking_status || order.tracking_status === 'Pending') && (
+                            <button onClick={() => handleShipOrder(order.id, customer?.email)} disabled={updating} style={{
+                              width: '100%', padding: '0.65rem', background: '#2563eb', color: 'white',
+                              border: 'none', borderRadius: '0.5rem', fontWeight: 700, cursor: 'pointer',
+                              display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '0.4rem',
+                              fontSize: '0.875rem', marginBottom: '0.5rem',
+                            }}>
+                              <Truck size={15} /> Mark as Shipped
                             </button>
                           )}
-                        </div>
-                      )}
 
-                      {order.tracking_status === 'Shipped' && order.delivery_token && (
-                        <div className="bg-blue-50 border border-blue-200 p-3 rounded-sm mt-4">
-                          <div className="text-[10px] font-bold text-blue-800 uppercase tracking-widest mb-1 flex items-center gap-1"><LinkIcon size={12}/> Rider Delivery Link</div>
-                          <div className="flex items-center gap-2 bg-white border border-blue-100 p-2 rounded-sm">
-                            <input 
-                              type="text" 
-                              readOnly 
-                              value={`${window.location.origin}/delivery?order=${order.id}&token=${order.delivery_token}`}
-                              className="text-xs text-gray-600 w-full outline-none bg-transparent"
-                            />
-                            <button 
-                              onClick={() => {
-                                navigator.clipboard.writeText(`${window.location.origin}/delivery?order=${order.id}&token=${order.delivery_token}`);
-                                alert('Link copied to clipboard!');
-                              }}
-                              className="text-blue-600 hover:text-blue-800 p-1"
-                              title="Copy Link"
-                            >
-                              <Copy size={14} />
-                            </button>
-                          </div>
-                          <div className="text-[10px] text-blue-600 mt-1 font-medium">Share this link securely with the delivery rider.</div>
-                        </div>
-                      )}
+                          {/* Delivery token */}
+                          {order.tracking_status === 'Shipped' && order.delivery_token && (
+                            <div style={{ background: '#eff6ff', border: '1px solid #bfdbfe', borderRadius: '0.5rem', padding: '0.75rem', marginTop: '0.5rem' }}>
+                              <div style={{ fontSize: '0.65rem', fontWeight: 700, color: '#1d4ed8', textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: '0.4rem', display: 'flex', alignItems: 'center', gap: '0.3rem' }}>
+                                <LinkIcon size={11} /> Rider Link
+                              </div>
+                              <div style={{ display: 'flex', alignItems: 'center', gap: '0.4rem', background: 'white', padding: '0.4rem 0.6rem', borderRadius: '0.4rem', border: '1px solid #bfdbfe' }}>
+                                <input type="text" readOnly value={`${window.location.origin}/delivery?order=${order.id}&token=${order.delivery_token}`}
+                                  style={{ flex: 1, fontSize: '0.72rem', border: 'none', background: 'transparent', outline: 'none', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }} />
+                                <button onClick={() => { navigator.clipboard.writeText(`${window.location.origin}/delivery?order=${order.id}&token=${order.delivery_token}`); }} style={{ background: 'none', border: 'none', cursor: 'pointer', color: '#2563eb', padding: '0.2rem' }}>
+                                  <Copy size={14} />
+                                </button>
+                              </div>
+                            </div>
+                          )}
 
-                      {order.paymentRef && (
-                        <div className="mt-4 pt-4 border-t border-gray-100 text-[10px] font-mono text-gray-400 break-all text-center">
-                          Ref: {order.paymentRef}
+                          {order.paymentRef && (
+                            <div style={{ marginTop: '0.75rem', fontSize: '0.65rem', fontFamily: 'monospace', color: 'var(--muted-fg)', wordBreak: 'break-all', textAlign: 'center' }}>
+                              Ref: {order.paymentRef}
+                            </div>
+                          )}
                         </div>
-                      )}
-                    </div>
+
+                      </div>
+                    )}
                   </div>
-                )}
-              </div>
-            );
-          })}
-        </div>
+                );
+              })}
+            </div>
+          )}
+        </>
       )}
 
-      {/* Customer Profile Modal */}
+      {/* ════════════════════════════════════════════════
+          REGISTERED USERS TAB
+      ════════════════════════════════════════════════ */}
+      {tab === 'users' && (
+        <>
+          {/* Users Search */}
+          <div style={{ background: 'var(--card)', border: '1px solid var(--border)', borderRadius: 'var(--radius)', padding: '0.85rem', marginBottom: '1.25rem', display: 'flex', gap: '0.75rem', alignItems: 'center', flexWrap: 'wrap' }}>
+            <div style={{ position: 'relative', flex: '1 1 200px' }}>
+              <Search size={15} style={{ position: 'absolute', left: '0.75rem', top: '50%', transform: 'translateY(-50%)', color: 'var(--muted-fg)' }} />
+              <input style={{ ...inputStyle, paddingLeft: '2.2rem' }} placeholder="Search by name, email or phone…" value={userSearch} onChange={e => setUserSearch(e.target.value)} />
+            </div>
+            <div style={{ fontSize: '0.82rem', color: 'var(--muted-fg)', whiteSpace: 'nowrap' }}>
+              {filteredUsers.length} user{filteredUsers.length !== 1 ? 's' : ''}
+            </div>
+          </div>
+
+          {usersLoading ? (
+            <div style={{ padding: '4rem', textAlign: 'center', color: 'var(--muted-fg)' }}>Loading users…</div>
+          ) : filteredUsers.length === 0 ? (
+            <div style={{ padding: '3rem', textAlign: 'center', color: 'var(--muted-fg)', background: 'var(--card)', borderRadius: 'var(--radius)', border: '1px solid var(--border)' }}>
+              <Users size={40} style={{ margin: '0 auto 0.75rem', display: 'block', opacity: 0.3 }} />
+              No users found.
+            </div>
+          ) : (
+            <>
+              {/* Desktop table */}
+              <div style={{ overflowX: 'auto', borderRadius: 'var(--radius)', border: '1px solid var(--border)', display: 'none' }} className="users-table-desktop">
+              </div>
+
+              {/* Responsive card list */}
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '0.6rem' }}>
+                {filteredUsers.map((u, i) => {
+                  const userOrders = orders.filter(o => o.userId === u.id);
+                  const totalSpent = userOrders.reduce((s, o) => s + (o.amountPaid || 0), 0);
+                  const isVerified = u.isEmailVerified === true;
+
+                  return (
+                    <div key={u.id} style={{
+                      background: 'var(--card)', border: '1px solid var(--border)',
+                      borderRadius: 'var(--radius)', padding: '0.9rem 1.1rem',
+                      display: 'flex', flexWrap: 'wrap', alignItems: 'center', gap: '0.75rem 1.25rem',
+                    }}>
+                      {/* Avatar */}
+                      <div style={{
+                        width: '42px', height: '42px', borderRadius: '50%', flexShrink: 0,
+                        background: 'var(--gradient-primary)', color: 'white',
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        fontWeight: 800, fontSize: '1rem',
+                      }}>
+                        {u.firstName?.[0]?.toUpperCase() || '?'}
+                      </div>
+
+                      {/* Name + Email */}
+                      <div style={{ flex: '1 1 160px', minWidth: 0 }}>
+                        <div style={{ fontWeight: 700, fontSize: '0.9rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          {u.firstName} {u.lastName}
+                        </div>
+                        <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.78rem', color: 'var(--muted-fg)', marginTop: '0.1rem', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}>
+                          <Mail size={11} /> {u.email || '—'}
+                        </div>
+                        {u.phone && (
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '0.3rem', fontSize: '0.75rem', color: 'var(--muted-fg)', marginTop: '0.1rem' }}>
+                            <Phone size={11} /> {u.phone}
+                          </div>
+                        )}
+                      </div>
+
+                      {/* Verified badge */}
+                      <div>
+                        <span style={{
+                          display: 'inline-flex', alignItems: 'center', gap: '0.3rem',
+                          padding: '0.2rem 0.6rem', borderRadius: '9999px',
+                          fontSize: '0.68rem', fontWeight: 700, textTransform: 'uppercase',
+                          background: isVerified ? '#dcfce7' : '#fef3c7',
+                          color: isVerified ? '#15803d' : '#b45309',
+                        }}>
+                          <UserCheck size={11} />
+                          {isVerified ? 'Verified' : 'Unverified'}
+                        </span>
+                      </div>
+
+                      {/* Orders & Spent */}
+                      <div style={{ textAlign: 'right', minWidth: '100px' }}>
+                        <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--muted-fg)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>Orders</div>
+                        <div style={{ fontWeight: 800, fontFamily: 'var(--font-display)', fontSize: '1rem' }}>{userOrders.length}</div>
+                      </div>
+
+                      <div style={{ textAlign: 'right', minWidth: '110px' }}>
+                        <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--muted-fg)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>Total Paid</div>
+                        <div style={{ fontWeight: 800, fontFamily: 'var(--font-display)', fontSize: '1rem', color: totalSpent > 0 ? '#15803d' : 'var(--muted-fg)' }}>
+                          {totalSpent > 0 ? fmt(totalSpent) : '—'}
+                        </div>
+                      </div>
+
+                      {/* Joined */}
+                      <div style={{ textAlign: 'right', minWidth: '80px' }}>
+                        <div style={{ fontSize: '0.68rem', fontWeight: 700, color: 'var(--muted-fg)', textTransform: 'uppercase', letterSpacing: '0.07em' }}>Joined</div>
+                        <div style={{ fontSize: '0.8rem', fontWeight: 600 }}>
+                          {u.createdAt?.toDate?.().toLocaleDateString('en-GB', { day: 'numeric', month: 'short', year: '2-digit' }) || '—'}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </>
+          )}
+        </>
+      )}
+
+      {/* ════════════════════════════════════════════════
+          CUSTOMER PROFILE MODAL
+      ════════════════════════════════════════════════ */}
       {selectedCustomerProfile && (() => {
-        const profileUser = userCache[selectedCustomerProfile];
-        const userOrders = orders.filter(o => o.userId === selectedCustomerProfile).sort((a,b) => b.createdAt?.toMillis() - a.createdAt?.toMillis());
-        const lifetimeTotal = userOrders.reduce((acc, o) => acc + o.totalAmount, 0);
-        const lifetimePaid = userOrders.reduce((acc, o) => acc + o.amountPaid, 0);
-        const lifetimeOwed = lifetimeTotal - lifetimePaid;
+        const pu = userCache[selectedCustomerProfile];
+        const uOrders = orders.filter(o => o.userId === selectedCustomerProfile).sort((a, b) => (b.createdAt?.toMillis() || 0) - (a.createdAt?.toMillis() || 0));
+        const ltTotal = uOrders.reduce((s, o) => s + o.totalAmount, 0);
+        const ltPaid  = uOrders.reduce((s, o) => s + o.amountPaid, 0);
+        const ltOwed  = ltTotal - ltPaid;
 
         return (
-          <div className="fixed inset-0 bg-black/60 z-50 flex items-center justify-center p-4 backdrop-blur-sm" onClick={() => setSelectedCustomerProfile(null)}>
-            <div className="bg-white rounded-xl shadow-2xl w-full max-w-3xl max-h-[90vh] overflow-hidden flex flex-col" onClick={e => e.stopPropagation()}>
-              
-              <div className="p-6 border-b border-gray-100 flex justify-between items-start bg-gray-50">
-                <div className="flex items-center gap-4">
-                  <div className="w-16 h-16 rounded-full bg-zeal-dark text-white flex items-center justify-center font-black text-2xl shadow-inner">
-                    {profileUser ? profileUser.firstName?.[0]?.toUpperCase() : <Users size={24} />}
+          <div onClick={() => setSelectedCustomerProfile(null)} style={{
+            position: 'fixed', inset: 0, background: 'rgba(0,0,0,0.55)',
+            zIndex: 9999, display: 'flex', alignItems: 'center', justifyContent: 'center',
+            padding: '1rem', backdropFilter: 'blur(4px)',
+          }}>
+            <div onClick={e => e.stopPropagation()} style={{
+              background: 'var(--card)', borderRadius: 'calc(var(--radius) + 4px)',
+              width: '100%', maxWidth: '680px', maxHeight: '90vh',
+              display: 'flex', flexDirection: 'column', overflow: 'hidden',
+              boxShadow: '0 24px 60px rgba(0,0,0,0.2)',
+            }}>
+              {/* Modal Header */}
+              <div style={{ padding: '1.25rem 1.5rem', borderBottom: '1px solid var(--border)', display: 'flex', justifyContent: 'space-between', alignItems: 'center', background: 'var(--muted)' }}>
+                <div style={{ display: 'flex', alignItems: 'center', gap: '0.85rem' }}>
+                  <div style={{ width: '50px', height: '50px', borderRadius: '50%', background: 'var(--gradient-primary)', color: 'white', display: 'flex', alignItems: 'center', justifyContent: 'center', fontWeight: 800, fontSize: '1.2rem', flexShrink: 0 }}>
+                    {pu?.firstName?.[0]?.toUpperCase() || '?'}
                   </div>
                   <div>
-                    <h2 className="text-xl font-black font-display text-gray-900">
-                      {profileUser ? `${profileUser.firstName} ${profileUser.lastName}` : 'Unknown Customer'}
-                    </h2>
-                    <p className="text-sm font-medium text-gray-500">{profileUser?.email || selectedCustomerProfile}</p>
-                    {profileUser?.phone && <p className="text-xs text-gray-400 mt-1">{profileUser.phone}</p>}
+                    <div style={{ fontFamily: 'var(--font-display)', fontWeight: 700, fontSize: '1.15rem' }}>{pu ? `${pu.firstName} ${pu.lastName}` : 'Unknown'}</div>
+                    <div style={{ fontSize: '0.8rem', color: 'var(--muted-fg)', display: 'flex', alignItems: 'center', gap: '0.3rem' }}><Mail size={12} />{pu?.email}</div>
+                    {pu?.phone && <div style={{ fontSize: '0.75rem', color: 'var(--muted-fg)', display: 'flex', alignItems: 'center', gap: '0.3rem', marginTop: '0.1rem' }}><Phone size={11} />{pu.phone}</div>}
                   </div>
                 </div>
-                <button onClick={() => setSelectedCustomerProfile(null)} className="text-gray-400 hover:text-gray-600 p-2 rounded-full hover:bg-gray-200 transition-colors">
-                  <X size={20} />
+                <button onClick={() => setSelectedCustomerProfile(null)} style={{ background: 'var(--muted)', border: 'none', borderRadius: '50%', width: '34px', height: '34px', cursor: 'pointer', display: 'flex', alignItems: 'center', justifyContent: 'center', color: 'var(--muted-fg)' }}>
+                  <X size={18} />
                 </button>
               </div>
 
-              <div className="grid grid-cols-3 gap-4 p-6 bg-white border-b border-gray-100">
-                <div className="bg-blue-50 border border-blue-100 p-4 rounded-lg">
-                  <div className="text-[10px] font-bold text-blue-400 uppercase tracking-widest mb-1">Total Ordered</div>
-                  <div className="font-black text-xl text-blue-900">{fmt(lifetimeTotal)}</div>
-                </div>
-                <div className="bg-green-50 border border-green-100 p-4 rounded-lg">
-                  <div className="text-[10px] font-bold text-green-500 uppercase tracking-widest mb-1">Total Paid</div>
-                  <div className="font-black text-xl text-green-700">{fmt(lifetimePaid)}</div>
-                </div>
-                <div className={`p-4 rounded-lg border ${lifetimeOwed > 0 ? 'bg-amber-50 border-amber-200' : 'bg-gray-50 border-gray-200'}`}>
-                  <div className={`text-[10px] font-bold uppercase tracking-widest mb-1 ${lifetimeOwed > 0 ? 'text-amber-600' : 'text-gray-400'}`}>Outstanding Balance</div>
-                  <div className={`font-black text-xl ${lifetimeOwed > 0 ? 'text-amber-700' : 'text-gray-400'}`}>{fmt(lifetimeOwed)}</div>
-                </div>
+              {/* Stats */}
+              <div style={{ display: 'grid', gridTemplateColumns: 'repeat(3, 1fr)', gap: '0.5rem', padding: '1rem 1.5rem', borderBottom: '1px solid var(--border)' }}>
+                {[
+                  { label: 'Total Ordered', value: fmt(ltTotal), accent: '#3b82f6', bg: '#eff6ff' },
+                  { label: 'Total Paid',    value: fmt(ltPaid),  accent: '#22c55e', bg: '#f0fdf4' },
+                  { label: 'Outstanding',   value: fmt(ltOwed),  accent: ltOwed > 0 ? '#f59e0b' : '#94a3b8', bg: ltOwed > 0 ? '#fffbeb' : '#f8fafc' },
+                ].map(s => (
+                  <div key={s.label} style={{ background: s.bg, borderRadius: 'var(--radius)', padding: '0.75rem', textAlign: 'center' }}>
+                    <div style={{ fontSize: '0.65rem', fontWeight: 700, color: s.accent, textTransform: 'uppercase', letterSpacing: '0.07em', marginBottom: '0.3rem' }}>{s.label}</div>
+                    <div style={{ fontFamily: 'var(--font-display)', fontWeight: 800, fontSize: '1rem', color: s.accent }}>{s.value}</div>
+                  </div>
+                ))}
               </div>
 
-              <div className="p-6 overflow-y-auto flex-grow bg-gray-50">
-                <h3 className="text-sm font-bold text-gray-900 uppercase tracking-widest mb-4">Order History ({userOrders.length})</h3>
-                <div className="flex flex-col gap-3">
-                  {userOrders.map(o => (
-                    <div key={o.id} className="bg-white border border-gray-200 p-4 rounded-lg shadow-sm flex flex-wrap gap-4 justify-between items-center">
+              {/* Order history */}
+              <div style={{ overflow: 'auto', flex: 1, padding: '1rem 1.5rem' }}>
+                <div style={{ fontWeight: 700, fontSize: '0.82rem', textTransform: 'uppercase', letterSpacing: '0.07em', color: 'var(--muted-fg)', marginBottom: '0.85rem' }}>
+                  Order History ({uOrders.length})
+                </div>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
+                  {uOrders.map(o => (
+                    <div key={o.id} style={{ display: 'flex', flexWrap: 'wrap', gap: '0.5rem 1rem', alignItems: 'center', justifyContent: 'space-between', padding: '0.75rem', background: 'var(--muted)', borderRadius: 'var(--radius)', fontSize: '0.875rem' }}>
                       <div>
-                        <div className="font-mono text-xs text-gray-500 mb-1">#{o.id}</div>
-                        <div className="text-sm font-bold text-gray-900">{o.createdAt?.toDate().toLocaleDateString()}</div>
+                        <div style={{ fontFamily: 'monospace', fontSize: '0.72rem', color: 'var(--muted-fg)' }}>#{o.id.slice(0, 12)}</div>
+                        <div style={{ fontWeight: 600 }}>{o.createdAt?.toDate().toLocaleDateString('en-GB')}</div>
                       </div>
-                      <div className="text-right">
-                        <div className="font-bold text-sm text-gray-900">{fmt(o.totalAmount)}</div>
-                        <div className="text-xs text-gray-500">{fmt(o.amountPaid)} paid</div>
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ fontWeight: 800 }}>{fmt(o.totalAmount)}</div>
+                        <div style={{ fontSize: '0.75rem', color: 'var(--muted-fg)' }}>{fmt(o.amountPaid)} paid</div>
                       </div>
-                      <div>
-                        <span className={`inline-flex items-center px-2.5 py-1 rounded-full text-[10px] font-bold uppercase tracking-wider ${o.status === 'Completed' ? 'bg-green-100 text-green-800' : 'bg-amber-100 text-amber-800'}`}>
-                          {o.status}
-                        </span>
-                      </div>
+                      <Badge label={o.status} colors={STATUS_COLORS[o.status] || STATUS_COLORS.default} />
                     </div>
                   ))}
+                  {uOrders.length === 0 && <div style={{ color: 'var(--muted-fg)', textAlign: 'center', padding: '1.5rem' }}>No orders yet.</div>}
                 </div>
               </div>
-
             </div>
           </div>
         );
