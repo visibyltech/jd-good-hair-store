@@ -26,7 +26,7 @@ const useAuthStore = create((set) => ({
           if (userDoc.exists()) {
             userData = userDoc.data();
             // Explicitly check the isAdmin boolean from Firestore, or role
-            isAdmin = userData?.isAdmin === true || userData?.role === 'admin';
+            isAdmin = userData?.isAdmin === true || String(userData?.isAdmin).toLowerCase() === 'true' || String(userData?.role).toLowerCase() === 'admin';
           }
 
           set({ 

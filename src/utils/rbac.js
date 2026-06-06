@@ -16,7 +16,7 @@ export const USER_ROLES = {
  * @returns {boolean}
  */
 export const isAdmin = (user, userData = null) => {
-  return userData?.role === USER_ROLES.ADMIN || userData?.isAdmin === true;
+  return String(userData?.role).toLowerCase() === USER_ROLES.ADMIN || userData?.isAdmin === true || String(userData?.isAdmin).toLowerCase() === 'true';
 };
 
 /**
