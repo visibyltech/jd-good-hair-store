@@ -64,7 +64,9 @@ export default function Shop() {
   const filtered = products.filter(p => {
     if (p.is_hidden) return false;
     const matchCat    = active === 'All' || p.category === active;
-    const matchSearch = p.name.toLowerCase().includes(search.toLowerCase());
+    const searchTerms = search.toLowerCase().trim().split(/\s+/).filter(Boolean);
+    const searchableText = `${p.name || ''} ${p.category || ''} ${p.description || ''} ${p.tag || ''}`.toLowerCase();
+    const matchSearch = searchTerms.length === 0 || searchTerms.every(term => searchableText.includes(term));
     return matchCat && matchSearch;
   });
 
