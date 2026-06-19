@@ -103,6 +103,7 @@ export default function Register() {
         setError('Please check your internet connection and try again.');
         toast.error('Check your internet connection.');
       } else {
+        console.error("Firebase Auth Error: ", err);
         setError('Failed to register. Please try again later.');
         toast.error('Failed to register. Please try again.');
       }

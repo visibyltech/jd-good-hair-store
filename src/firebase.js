@@ -5,13 +5,13 @@ import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
 
 const firebaseConfig = {
-  apiKey: "AIzaSyAjQZ1QcG3uzcB1m-hW2zWGrCViqIknaoM",
-  authDomain: "jd-good-hair.firebaseapp.com",
-  projectId: "jd-good-hair",
-  storageBucket: "jd-good-hair.firebasestorage.app",
-  messagingSenderId: "906132807042",
-  appId: "1:906132807042:web:68ec98e44a515a7c68039b",
-  measurementId: "G-MTL0EEFGYR"
+  apiKey: "AIzaSyCC4_WRP5Z0o7Z0upm0A5NvcfZR2ljz6O0",
+  authDomain: "jd-good-hair-de68c.firebaseapp.com",
+  projectId: "jd-good-hair-de68c",
+  storageBucket: "jd-good-hair-de68c.firebasestorage.app",
+  messagingSenderId: "35124256373",
+  appId: "1:35124256373:web:cdba9712aeaa6819e9623c",
+  measurementId: "G-8PSR8RDC55"
 };
 
 const app = initializeApp(firebaseConfig);

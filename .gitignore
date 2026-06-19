@@ -16,6 +16,11 @@ dist-ssr
 .env.*
 !.env.example
 
+# Firebase Admin (keep private!)
+serviceAccount.json
+newServiceAccount.json
+firebase-export-*.json
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json
@@ -26,3 +31,7 @@ dist-ssr
 *.njsproj
 *.sln
 *.sw?
+
+auth-users-backup.json
+test-*.js
+send-password-resets.js
