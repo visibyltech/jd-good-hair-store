@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
+import { createPortal } from 'react-dom';
 import { Link, useNavigate } from 'react-router-dom';
-import { Trash2, ArrowLeft, CreditCard } from 'lucide-react';
+import { Trash2, ArrowLeft, CreditCard, X } from 'lucide-react';
 import { collection, addDoc, doc, getDoc, updateDoc, serverTimestamp } from 'firebase/firestore';
 import { db } from '../firebase';
 import useCartStore from '../store/useCartStore';
@@ -19,6 +20,27 @@ function fmt(n) {
 
 const INTEREST_RATES = { 2: 0.05, 3: 0.1, 4: 0.1, 5: 0.2, 6: 0.2 };
 const DELIVERY_FEE = 7000;
+
+// ── Klump lazy-loader (mirrors The Electric Plug reference) ──────────────────
+let klumpScriptPromise = null;
+function loadKlumpScript() {
+  if (klumpScriptPromise) return klumpScriptPromise;
+  klumpScriptPromise = new Promise((resolve, reject) => {
+    const scriptId = 'klump-js-script';
+    if (document.getElementById(scriptId)) { resolve(); return; }
+    const script = document.createElement('script');
+    script.id = scriptId;
+    script.src = 'https://js.useklump.com/klump.js';
+    script.onload = () => resolve();
+    script.onerror = () => { klumpScriptPromise = null; reject(new Error('Failed to load Klump script')); };
+    document.body.appendChild(script);
+  });
+  return klumpScriptPromise;
+}
+
+function getKlump() {
+  try { return (0, eval)('Klump'); } catch (e) { return undefined; }
+}
 
 export default function Cart() {
   const navigate = useNavigate();
@@ -75,6 +97,22 @@ export default function Cart() {
   const [itemToRemove, setItemToRemove] = useState(null);
   const [expandedItems, setExpandedItems] = useState([]);
   const [itemGroups, setItemGroups] = useState({});
+  const [klumpOpen, setKlumpOpen] = useState(false);
+
+  // Force Klump's dynamically injected iframes to stay below our cancel button
+  useEffect(() => {
+    let interval;
+    if (klumpOpen) {
+      interval = setInterval(() => {
+        document.querySelectorAll('iframe[src*="klump"], [id^="klump"]').forEach(el => {
+          if (el.style && el.id !== 'klump__checkout') {
+            el.style.setProperty('z-index', '2147483640', 'important');
+          }
+        });
+      }, 500);
+    }
+    return () => clearInterval(interval);
+  }, [klumpOpen]);
 
   useEffect(() => {
     if (user && isAdmin) {
@@ -332,6 +370,107 @@ export default function Cart() {
     });
   };
 
+  // ── Klump BNPL payment handler ────────────────────────────────────────────
+  const handleKlumpPayment = async () => {
+    setLoading(true);
+    setKlumpOpen(true);
+    setError('');
+    try {
+      await loadKlumpScript();
+      const KlumpCtor = getKlump();
+      if (!KlumpCtor) throw new Error('Klump payment service unavailable. Check your connection.');
+
+      const klumpKey = import.meta.env.VITE_KLUMP_PUBLIC_KEY;
+      if (!klumpKey) throw new Error('Klump is not configured. Please contact support.');
+
+      // Pre-validate cart items (reuse existing inventory check)
+      let verifiedTotalToPayNow = DELIVERY_FEE;
+      const verifiedItems = [];
+      const quantityMap = {};
+      for (const item of items) {
+        quantityMap[item.id] = (quantityMap[item.id] || 0) + item.quantity;
+      }
+      const { doc: fbDoc, getDoc } = await import('firebase/firestore');
+      const { db: fbDb } = await import('../firebase');
+      const productDataCache = {};
+      for (const [productId, requiredQty] of Object.entries(quantityMap)) {
+        const docRef = fbDoc(fbDb, 'products', productId);
+        const docSnap = await getDoc(docRef);
+        if (!docSnap.exists()) throw new Error('One or more products in your cart no longer exist.');
+        const pData = docSnap.data();
+        productDataCache[productId] = pData;
+        if (!pData.unlimited_stock && requiredQty > (pData.items_left || 0)) {
+          throw new Error(`Insufficient stock for "${pData.name}". Only ${pData.items_left || 0} left.`);
+        }
+      }
+      for (const item of items) {
+        const dbProduct = productDataCache[item.id];
+        const truePrice = Number(dbProduct.price);
+        if (item.paymentChoice === 'full') {
+          verifiedTotalToPayNow += truePrice * item.quantity;
+        } else {
+          const rate = INTEREST_RATES[item.installments] ?? 0.2;
+          const fullAmount = truePrice * (1 + rate);
+          verifiedTotalToPayNow += (fullAmount / item.installments) * item.quantity;
+        }
+        verifiedItems.push({ ...item, price: truePrice });
+      }
+
+      new KlumpCtor({
+        publicKey: klumpKey,
+        data: {
+          amount: verifiedTotalToPayNow,
+          shipping_fee: DELIVERY_FEE,
+          currency: 'NGN',
+          redirect_url: `${window.location.origin}/profile`,
+          merchant_reference: `JD_KLUMP_${Date.now()}_${Math.floor(Math.random() * 1000)}`,
+          meta_data: {
+            customer: user?.displayName || user?.email?.split('@')[0] || 'Customer',
+            email: user?.email || '',
+          },
+          items: verifiedItems.map(i => ({
+            image_url: i.img || i.image || i.imgUrl || '',
+            item_url: `${window.location.origin}/products`,
+            name: i.name,
+            unit_price: i.paymentChoice === 'full' ? i.price : (i.periodPayment || i.price),
+            quantity: i.quantity,
+          })),
+        },
+        onSuccess: async (data) => {
+          setKlumpOpen(false);
+          const klumpRef = data?.data?.reference || `JD_KLUMP_${Date.now()}`;
+          setLoading(true);
+          try {
+            await saveOrder(verifiedItems, klumpRef, DELIVERY_FEE);
+            clearCart();
+            toast.success('Payment successful! Order placed.');
+            setShowPreview(false);
+            navigate('/profile');
+          } catch (err) {
+            console.error('Error saving order after Klump:', err);
+            setError('Payment successful but failed to save order. Please contact support with ref: ' + klumpRef);
+          } finally {
+            setLoading(false);
+          }
+        },
+        onError: () => {
+          setError('Klump payment failed or was declined. Please try again or use Korapay.');
+          setLoading(false);
+          setKlumpOpen(false);
+        },
+        onLoad: () => {},
+        onClose: () => {
+          setLoading(false);
+          setKlumpOpen(false);
+        },
+      });
+    } catch (err) {
+      setError(err.message || 'Failed to load Klump. Please check your connection.');
+      setLoading(false);
+      setKlumpOpen(false);
+    }
+  };
+
   const handleRemoveConfirm = () => {
     if (itemToRemove) removeFromCart(itemToRemove.cartItemId);
     setItemToRemove(null);
@@ -353,8 +492,51 @@ export default function Cart() {
     );
   }
 
+  // ── Klump cancel helper ──────────────────────────────────────────────────
+  const cancelKlump = () => {
+    try {
+      const klumpDiv = document.getElementById('klump__checkout');
+      if (klumpDiv) klumpDiv.innerHTML = '';
+      document.querySelectorAll('[id^="klump"]').forEach(el => {
+        if (el.id !== 'klump__checkout') el.remove();
+      });
+      document.querySelectorAll('iframe[src*="klump"]').forEach(el => el.remove());
+    } catch (e) { /* ignore */ }
+    setKlumpOpen(false);
+    setLoading(false);
+    setError('Klump payment cancelled. You can try again or pay with Korapay.');
+  };
+
   return (
     <>
+      {/* Klump checkout mount point — hidden when not in use */}
+      <div id="klump__checkout" style={{ display: klumpOpen ? 'block' : 'none' }} />
+
+      {/* Floating cancel button rendered above Klump's full-screen iframe */}
+      {klumpOpen && createPortal(
+        <>
+          {/* Desktop: top-right corner */}
+          <div style={{ position: 'fixed', top: 0, left: 0, right: 0, zIndex: 2147483647, display: 'flex', justifyContent: 'flex-end', padding: '12px 16px', pointerEvents: 'none' }}>
+            <button
+              onClick={cancelKlump}
+              style={{ pointerEvents: 'auto', background: '#B30000', color: '#fff', border: 'none', borderRadius: '50px', padding: '12px 22px', fontWeight: 800, fontSize: '14px', cursor: 'pointer', boxShadow: '0 4px 20px rgba(0,0,0,0.6)', display: 'flex', alignItems: 'center', gap: '8px' }}
+            >
+              <X size={14} /> Cancel Payment
+            </button>
+          </div>
+          {/* Mobile: sticky bottom bar */}
+          <div style={{ position: 'fixed', bottom: 0, left: 0, right: 0, zIndex: 2147483647, padding: '12px 16px', background: 'rgba(0,0,0,0.85)', backdropFilter: 'blur(6px)', display: 'flex', justifyContent: 'center', pointerEvents: 'none' }}>
+            <button
+              onClick={cancelKlump}
+              style={{ pointerEvents: 'auto', background: '#B30000', color: '#fff', border: 'none', borderRadius: '50px', padding: '14px 32px', fontWeight: 800, fontSize: '15px', cursor: 'pointer', boxShadow: '0 4px 24px rgba(179,0,0,0.5)', display: 'flex', alignItems: 'center', gap: '8px', width: '100%', maxWidth: '400px', justifyContent: 'center' }}
+            >
+              <X size={16} /> Cancel Payment
+            </button>
+          </div>
+        </>,
+        document.body
+      )}
+
       <main>
         <div className="container" style={{ padding: '4rem 1rem', minHeight: '60vh' }}>
           <Link to="/products" style={{ display: 'inline-flex', alignItems: 'center', gap: '0.5rem', color: 'var(--muted-fg)', marginBottom: '2rem', textDecoration: 'none', fontWeight: '500' }}>
@@ -559,7 +741,7 @@ export default function Cart() {
                   Review & Confirm Order
                 </button>
                 <div style={{ textAlign: 'center', marginTop: '1rem', fontSize: '0.8rem', color: 'var(--muted-fg)' }}>
-                  Secure checkout powered by Korapay.
+                  Secure checkout powered by Korapay &amp; Klump.
                 </div>
               </div>
             </div>
@@ -729,15 +911,51 @@ export default function Cart() {
                     <span style={{ color: 'var(--primary)' }}>{fmt(totalToPayNow)}</span>
                   </div>
                 </div>
-                <div style={{ display: 'flex', gap: '1rem' }}>
-                  <button onClick={() => setShowPreview(false)} disabled={loading}
-                    style={{ flex: 1, padding: '0.85rem', background: 'transparent', border: '1px solid var(--border)', borderRadius: '8px', fontWeight: '600', cursor: 'pointer', color: 'var(--foreground)' }}>
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '0.75rem' }}>
+                  {/* ── Payment buttons ── */}
+                  {!splitMode && (
+                    <>
+                      {/* Korapay */}
+                      <button
+                        onClick={handleKorapayPayment}
+                        disabled={loading}
+                        style={{ width: '100%', padding: '0.9rem', background: 'var(--primary)', color: 'white', border: 'none', borderRadius: '8px', fontWeight: '700', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.7 : 1, display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem', fontSize: '1rem' }}
+                      >
+                        <CreditCard size={18} />
+                        {loading ? 'Processing...' : 'Pay with Korapay'}
+                      </button>
+
+                      {/* Klump BNPL */}
+                      <button
+                        onClick={handleKlumpPayment}
+                        disabled={loading}
+                        style={{ width: '100%', padding: '0.9rem', background: '#1a1a1a', color: '#FFCE1E', border: '2px solid #FFCE1E', borderRadius: '8px', fontWeight: '700', cursor: loading ? 'not-allowed' : 'pointer', opacity: loading ? 0.7 : 1, display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem', fontSize: '1rem' }}
+                      >
+                        ⚡ {loading ? 'Loading Klump...' : 'Pay with Klump (BNPL)'}
+                      </button>
+                      <p style={{ textAlign: 'center', fontSize: '0.75rem', color: 'var(--muted-fg)', margin: 0 }}>Klump lets you spread payments over time — no card needed upfront.</p>
+                    </>
+                  )}
+
+                  {/* Split-mode: single confirm button */}
+                  {splitMode && (
+                    <button
+                      onClick={handleKorapayPayment}
+                      disabled={loading || Object.keys(getGroupConflicts(buildGroupMap(expandedItems))).length > 0}
+                      style={{ width: '100%', padding: '0.9rem', background: 'var(--primary)', color: 'white', border: 'none', borderRadius: '8px', fontWeight: '700', cursor: (loading || Object.keys(getGroupConflicts(buildGroupMap(expandedItems))).length > 0) ? 'not-allowed' : 'pointer', opacity: (loading || Object.keys(getGroupConflicts(buildGroupMap(expandedItems))).length > 0) ? 0.7 : 1, display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem', fontSize: '1rem' }}
+                    >
+                      <CreditCard size={18} />
+                      {loading ? 'Processing...' : Object.keys(getGroupConflicts(buildGroupMap(expandedItems))).length > 0 ? 'Resolve Conflicts First' : `Place ${Object.keys(buildGroupMap(expandedItems)).length} Orders`}
+                    </button>
+                  )}
+
+                  {/* Cancel */}
+                  <button
+                    onClick={() => setShowPreview(false)}
+                    disabled={loading}
+                    style={{ width: '100%', padding: '0.75rem', background: 'transparent', border: '1px solid var(--border)', borderRadius: '8px', fontWeight: '600', cursor: 'pointer', color: 'var(--muted-fg)', fontSize: '0.9rem' }}
+                  >
                     Cancel
-                  </button>
-                  <button onClick={handleKorapayPayment} disabled={loading || (splitMode && Object.keys(getGroupConflicts(buildGroupMap(expandedItems))).length > 0)}
-                    style={{ flex: 1, padding: '0.85rem', background: 'var(--primary)', color: 'white', border: 'none', borderRadius: '8px', fontWeight: '600', cursor: (loading || (splitMode && Object.keys(getGroupConflicts(buildGroupMap(expandedItems))).length > 0)) ? 'not-allowed' : 'pointer', opacity: (loading || (splitMode && Object.keys(getGroupConflicts(buildGroupMap(expandedItems))).length > 0)) ? 0.7 : 1, display: 'flex', justifyContent: 'center', alignItems: 'center', gap: '0.5rem' }}>
-                    <CreditCard size={18} />
-                    {loading ? 'Processing...' : (splitMode && Object.keys(getGroupConflicts(buildGroupMap(expandedItems))).length > 0) ? 'Resolve Conflicts' : splitMode ? `Place ${Object.keys(buildGroupMap(expandedItems)).length} Orders` : 'Proceed to Pay'}
                   </button>
                 </div>
               </div>
