@@ -66,33 +66,16 @@ export default function Register() {
     const finalPhone = '+234' + formattedPhone;
 
     setLoading(true);
+
+    // Step 1: Create Firebase Auth account — this is the only truly fatal step.
+    let user;
     try {
       const userCredential = await createUserWithEmailAndPassword(auth, formData.email, formData.password);
-      const user = userCredential.user;
-
-      // Sign out immediately so they must verify OTP first
+      user = userCredential.user;
+      // Sign out immediately — they must verify OTP before logging in
       await auth.signOut();
-
-      await setDoc(doc(db, 'users', user.uid), {
-        firstName: formData.firstName,
-        lastName: formData.lastName,
-        phone: finalPhone,
-        email: formData.email,
-        isEmailVerified: false,
-        isPhoneVerified: false,
-        createdAt: new Date()
-      });
-
-      // Send OTP for all users — admin access is granted via Firestore role, not registration bypass
-      try {
-        await generateAndStoreOTP(formData.email, 'email_verification', formData.firstName);
-      } catch (otpErr) {
-        console.error('OTP generation error:', otpErr);
-        toast.error('Failed to send verification email. You can resend it on the next page.');
-      }
-
-      navigate(`/verify-otp?email=${encodeURIComponent(formData.email)}`);
     } catch (err) {
+      // Auth failed — safe to show error, no account was created
       if (err.code === 'auth/email-already-in-use') {
         setError('This email is already registered. Please login instead.');
         toast.error('This email is already registered.');
@@ -103,13 +86,41 @@ export default function Register() {
         setError('Please check your internet connection and try again.');
         toast.error('Check your internet connection.');
       } else {
-        console.error("Firebase Auth Error: ", err);
+        console.error('Firebase Auth Error:', err);
         setError('Failed to register. Please try again later.');
         toast.error('Failed to register. Please try again.');
       }
-    } finally {
       setLoading(false);
+      return;
     }
+
+    // Step 2: Write user profile to Firestore — non-fatal if it fails
+    try {
+      await setDoc(doc(db, 'users', user.uid), {
+        firstName: formData.firstName,
+        lastName: formData.lastName,
+        phone: finalPhone,
+        email: formData.email,
+        isEmailVerified: false,
+        isPhoneVerified: false,
+        createdAt: new Date()
+      });
+    } catch (firestoreErr) {
+      console.error('Firestore write error (non-fatal):', firestoreErr);
+      // Don't block registration — the account exists, we can recover
+    }
+
+    // Step 3: Send OTP email — non-fatal if it fails
+    try {
+      await generateAndStoreOTP(formData.email, 'email_verification', formData.firstName);
+    } catch (otpErr) {
+      console.error('OTP generation error (non-fatal):', otpErr);
+      toast.error('Failed to send verification email. You can resend it on the next page.');
+    }
+
+    // Step 4: Always navigate to verify OTP if Auth succeeded
+    setLoading(false);
+    navigate(`/verify-otp?email=${encodeURIComponent(formData.email)}`);
   };
 
   return (
