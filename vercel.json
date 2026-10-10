@@ -1,0 +1,8 @@
+{
+  "rewrites": [
+    {
+      "source": "/(.*)",
+      "destination": "https://velvet-oak-space.vercel.app/$1"
+    }
+  ]
+}
